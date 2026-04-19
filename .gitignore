@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+.eggs/
+.venv/
+venv/
+env/
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!example.tfvars
+
+# Build artifacts
+build/
+*.zip
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
+
+# Logs
+*.log
+
+# Internal working notes — not for public repo
+docs/deployment-log.md
+docs/explain-like-im-5.md
+docs/pending-commits.md
+docs/mcp-build-plan.md
+docs/next-session-prompt.md
+Interview Technical Deep Dive.md
