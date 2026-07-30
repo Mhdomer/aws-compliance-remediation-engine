@@ -1,0 +1,47 @@
+{
+  "version": "0",
+  "id": "a12b3c4d-5678-90ab-cdef-EXAMPLE11111",
+  "source": "aws.s3",
+  "account": "123456789012",
+  "time": "2024-01-15T14:30:00Z",
+  "region": "us-east-1",
+  "detail-type": "AWS API Call via CloudTrail",
+  "detail": {
+    "eventVersion": "1.09",
+    "userIdentity": {
+      "type": "IAMUser",
+      "principalId": "AIDACKCEVSQ6C2EXAMPLE",
+      "arn": "arn:aws:iam::123456789012:user/developer",
+      "accountId": "123456789012",
+      "userName": "developer"
+    },
+    "eventTime": "2024-01-15T14:30:00Z",
+    "eventSource": "s3.amazonaws.com",
+    "eventName": "PutBucketAcl",
+    "awsRegion": "us-east-1",
+    "sourceIPAddress": "203.0.113.0",
+    "userAgent": "aws-cli/2.0.0",
+    "requestParameters": {
+      "bucketName": "my-sensitive-data-bucket",
+      "AccessControlPolicy": {
+        "AccessControlList": {
+          "Grant": [
+            {
+              "Grantee": {
+                "URI": "http://acs.amazonaws.com/groups/global/AllUsers",
+                "xsi:type": "Group"
+              },
+              "Permission": "READ"
+            }
+          ]
+        },
+        "Owner": { "ID": "abc123def456" }
+      }
+    },
+    "responseElements": null,
+    "requestID": "EXAMPLE123456789",
+    "eventID": "a1b2c3d4-1234-5678-abcd-EXAMPLE11111",
+    "readOnly": false,
+    "eventType": "AwsApiCall"
+  }
+}

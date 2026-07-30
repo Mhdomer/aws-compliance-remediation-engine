@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest>=8.0.0
+pytest-mock>=3.12.0
+moto[s3,ec2,sqs,sns,cloudwatch]>=5.0.0
