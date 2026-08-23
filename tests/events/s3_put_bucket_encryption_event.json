@@ -1,0 +1,40 @@
+{
+  "_comment": "Constructed from the shape documented in src/lambda/rules/s3_rules.py (ServerSideEncryptionConfiguration.Rule is a singular object on the wire, not the SDK's Rules list). Unlike the other three fixtures this one was not captured from a live account - the rule it exercises had no fixture at all.",
+  "version": "0",
+  "id": "d45e6f70-8901-23de-f012-EXAMPLE44444",
+  "source": "aws.s3",
+  "account": "123456789012",
+  "time": "2024-01-15T14:45:00Z",
+  "region": "us-east-1",
+  "detail-type": "AWS API Call via CloudTrail",
+  "detail": {
+    "eventVersion": "1.09",
+    "userIdentity": {
+      "type": "IAMUser",
+      "arn": "arn:aws:iam::123456789012:user/developer",
+      "accountId": "123456789012",
+      "userName": "developer"
+    },
+    "eventTime": "2024-01-15T14:45:00Z",
+    "eventSource": "s3.amazonaws.com",
+    "eventName": "PutBucketEncryption",
+    "awsRegion": "us-east-1",
+    "sourceIPAddress": "203.0.113.0",
+    "requestParameters": {
+      "bucketName": "my-sensitive-data-bucket",
+      "ServerSideEncryptionConfiguration": {
+        "Rule": {
+          "ApplyServerSideEncryptionByDefault": {
+            "SSEAlgorithm": "AES256"
+          },
+          "BucketKeyEnabled": true
+        }
+      }
+    },
+    "responseElements": null,
+    "requestID": "EXAMPLE123456792",
+    "eventID": "d4e5f6a7-4567-8901-def0-EXAMPLE44444",
+    "readOnly": false,
+    "eventType": "AwsApiCall"
+  }
+}
