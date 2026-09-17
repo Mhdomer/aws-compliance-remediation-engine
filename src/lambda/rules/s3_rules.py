@@ -4,13 +4,28 @@ import os
 import boto3
 from botocore.exceptions import ClientError
 
-from utils.cloudwatch_utils import publish_violation
-from utils.notifier import send_alert
+from utils.aws_client import is_throttling_error, make_client
+from utils.exemption import (
+    EXEMPT_TAG_KEY,
+    EXEMPT_TAG_VALUE,
+    EXEMPT_UNTIL_TAG_KEY,
+    REJECTED_REASONS,
+    evaluate_exemption,
+)
+from utils.cloudwatch_utils import (
+    publish_exemption,
+    publish_exemption_rejected,
+    publish_throttled,
+    publish_violation,
+)
+from utils.notifier import (
+    NOTICE_EXEMPTION,
+    STATUS_EXEMPTION,
+    send_alert,
+    send_notice,
+)
 
 logger = logging.getLogger(__name__)
-
-EXEMPT_TAG_KEY = 'ComplianceExempt'
-EXEMPT_TAG_VALUE = 'true'
 
 PUBLIC_GRANTEE_URIS = {
     'http://acs.amazonaws.com/groups/global/AllUsers',
@@ -36,18 +51,70 @@ _s3_client = None
 def _get_client():
     global _s3_client
     if _s3_client is None:
-        _s3_client = boto3.client('s3')
+        _s3_client = make_client('s3')
     return _s3_client
 
 
-def _is_exempt(bucket_name: str) -> bool:
+def _record_exemption(check_type: str, bucket_name: str, actor: str) -> None:
+    """Make an applied exemption as loud as a violation.
+
+    The ComplianceExempt tag turns this control off for a resource, and it is
+    granted by s3:PutBucketTagging - a permission handed out for cost
+    allocation by people who do not know it also disables compliance checks.
+    Tag a bucket, then make it public, and without this the engine says
+    "exempt" and sends nothing at all.
+    """
+    logger.warning('Compliance check bypassed by exemption tag', extra={
+        'check': check_type,
+        'bucket': bucket_name,
+        'actor': actor,
+        'tag': f'{EXEMPT_TAG_KEY}={EXEMPT_TAG_VALUE}',
+    })
+    publish_exemption(check_type, bucket_name)
+    send_notice(
+        NOTICE_EXEMPTION,
+        bucket_name,
+        actor,
+        f'{check_type} skipped: bucket carries {EXEMPT_TAG_KEY}={EXEMPT_TAG_VALUE}',
+        STATUS_EXEMPTION,
+    )
+
+
+def _record_rejected_exemption(
+    check_type: str, bucket_name: str, actor: str, reason: str
+) -> None:
+    """Someone asked for an exemption that does not hold, so we checked anyway.
+
+    Reported rather than silently enforced: a resource the owner believed was
+    exempt is about to be remediated, and they need to know why.
+    """
+    logger.warning('Exemption rejected, checking the resource anyway', extra={
+        'check': check_type,
+        'bucket': bucket_name,
+        'actor': actor,
+        'reason': reason,
+        'expiry_tag': EXEMPT_UNTIL_TAG_KEY,
+    })
+    publish_exemption_rejected(check_type, bucket_name, reason)
+
+
+def _exemption_status(bucket_name: str) -> tuple[bool, str]:
+    """Whether the bucket carries the exemption tag.
+
+    Deliberately raises on any error other than NoSuchTagSet. A PutBucketAcl or
+    PutBucketEncryption event concerns exactly one bucket, so failing the
+    invocation abandons no other work and EventBridge retries it into the DLQ,
+    where the existing alarm catches it. Guessing "not exempt" would remediate a
+    resource we could not assess; guessing "exempt" would skip one. NoSuchTagSet
+    is not an error: a bucket with no tags at all is simply not exempt.
+    """
     try:
         response = _get_client().get_bucket_tagging(Bucket=bucket_name)
         tags = {t['Key']: t['Value'] for t in response.get('TagSet', [])}
-        return tags.get(EXEMPT_TAG_KEY, '').lower() == EXEMPT_TAG_VALUE
+        return evaluate_exemption(tags)
     except ClientError as exc:
         if exc.response['Error']['Code'] == 'NoSuchTagSet':
-            return False
+            return evaluate_exemption({})
         raise
 
 
@@ -66,9 +133,12 @@ def handle_put_bucket_acl(detail: dict) -> dict:
         logger.error('PutBucketAcl event missing bucketName')
         return {'status': 'error', 'reason': 'missing_bucket_name'}
 
-    if _is_exempt(bucket_name):
-        logger.info('Bucket is exempt from compliance checks', extra={'bucket': bucket_name})
+    exempt, reason = _exemption_status(bucket_name)
+    if exempt:
+        _record_exemption('S3_PUBLIC_ACL', bucket_name, actor)
         return {'status': 'exempt', 'bucket': bucket_name}
+    if reason in REJECTED_REASONS:
+        _record_rejected_exemption('S3_PUBLIC_ACL', bucket_name, actor, reason)
 
     request_params = detail.get('requestParameters', {})
     canned_acl = request_params.get('x-amz-acl', '')
@@ -102,6 +172,19 @@ def handle_put_bucket_acl(detail: dict) -> dict:
         action = 'Blocked all public access via PutPublicAccessBlock'
         logger.info('Remediation applied', extra={'bucket': bucket_name, 'action': action})
     except ClientError as exc:
+        if is_throttling_error(exc):
+            # A throttle means the remediation was never attempted, so it is
+            # not a failure. Re-raising fails the invocation, EventBridge
+            # retries it, and it only reaches the DLQ if it keeps failing.
+            # Recording it as remediation_failed would lose that retry and
+            # leave the resource exposed with nobody coming back to it.
+            publish_throttled(violation_type, bucket_name)
+            logger.warning('Remediation throttled, retrying via event replay', extra={
+                'bucket': bucket_name,
+                'error': str(exc),
+            })
+            raise
+
         remediated = False
         action = f'Remediation failed: {exc}'
         logger.error('Remediation failed', extra={'bucket': bucket_name, 'error': str(exc)})
@@ -141,8 +224,12 @@ def handle_put_bucket_encryption(detail: dict) -> dict:
         logger.error('PutBucketEncryption event missing bucketName')
         return {'status': 'error', 'reason': 'missing_bucket_name'}
 
-    if _is_exempt(bucket_name):
+    exempt, reason = _exemption_status(bucket_name)
+    if exempt:
+        _record_exemption('S3_WEAK_ENCRYPTION', bucket_name, actor)
         return {'status': 'exempt', 'bucket': bucket_name}
+    if reason in REJECTED_REASONS:
+        _record_rejected_exemption('S3_WEAK_ENCRYPTION', bucket_name, actor, reason)
 
     sse_algorithm = _extract_sse_algorithm(detail)
     if sse_algorithm == REQUIRED_SSE_ALGORITHM:
@@ -175,6 +262,19 @@ def handle_put_bucket_encryption(detail: dict) -> dict:
         action = 'Reapplied mandated customer-managed KMS encryption'
         logger.info('Remediation applied', extra={'bucket': bucket_name, 'action': action})
     except ClientError as exc:
+        if is_throttling_error(exc):
+            # A throttle means the remediation was never attempted, so it is
+            # not a failure. Re-raising fails the invocation, EventBridge
+            # retries it, and it only reaches the DLQ if it keeps failing.
+            # Recording it as remediation_failed would lose that retry and
+            # leave the resource exposed with nobody coming back to it.
+            publish_throttled(violation_type, bucket_name)
+            logger.warning('Remediation throttled, retrying via event replay', extra={
+                'bucket': bucket_name,
+                'error': str(exc),
+            })
+            raise
+
         remediated = False
         action = f'Remediation failed: {exc}'
         logger.error('Remediation failed', extra={'bucket': bucket_name, 'error': str(exc)})
