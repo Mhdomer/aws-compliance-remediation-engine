@@ -14,6 +14,59 @@ resource "aws_cloudwatch_metric_alarm" "high_violation_rate" {
   alarm_actions       = [aws_sns_topic.alerts.arn]
 }
 
+# A check that cannot reach a verdict is the quiet failure mode: the resource
+# is neither cleared nor remediated, and without this alarm nothing says so.
+# Threshold 0 because one undetermined check already means a resource went
+# unassessed.
+resource "aws_cloudwatch_metric_alarm" "detections_undetermined" {
+  alarm_name          = "${local.name_prefix}-detections-undetermined"
+  alarm_description   = "A compliance check could not determine whether a resource is compliant — it was neither cleared nor remediated and needs a human"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "DetectionsUndetermined"
+  namespace           = "ComplianceEngine"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+}
+
+# Every exemption already emails on its own. This is the different signal:
+# somebody tagging resources exempt in bulk, which is what evading the engine
+# at scale looks like. Threshold is a burst rate, not zero, because individual
+# exemptions are a legitimate governance action.
+resource "aws_cloudwatch_metric_alarm" "exemption_burst" {
+  alarm_name          = "${local.name_prefix}-exemption-burst"
+  alarm_description   = "Several resources were exempted from compliance checks in a short window — possible attempt to disable the engine at scale"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ExemptionsApplied"
+  namespace           = "ComplianceEngine"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 3
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+}
+
+# Throttling is a different problem from a remediation that was attempted and
+# refused: it means the engine is outrunning the account's API limits, and the
+# answer is lowering concurrency rather than fixing a resource.
+resource "aws_cloudwatch_metric_alarm" "remediations_throttled" {
+  alarm_name          = "${local.name_prefix}-remediations-throttled"
+  alarm_description   = "AWS is throttling this engine's remediation calls — it is running faster than the account's API limits allow, and events are being retried rather than applied"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "RemediationsThrottled"
+  namespace           = "ComplianceEngine"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+}
+
 resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
   alarm_name          = "${local.name_prefix}-lambda-errors"
   alarm_description   = "Lambda remediation function is throwing unhandled exceptions"

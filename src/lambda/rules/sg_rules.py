@@ -3,7 +3,8 @@ import logging
 import boto3
 from botocore.exceptions import ClientError
 
-from utils.cloudwatch_utils import publish_violation
+from utils.aws_client import is_throttling_error, make_client
+from utils.cloudwatch_utils import publish_throttled, publish_violation
 from utils.notifier import send_alert
 
 logger = logging.getLogger(__name__)
@@ -16,13 +17,21 @@ OPEN_CIDRS = {'0.0.0.0/0', '::/0'}
 # port range at all, and CloudTrail omits fromPort/toPort when it appears.
 ALL_TRAFFIC = '-1'
 
+# Revoking a rule that is already gone is the outcome we wanted, not a
+# failure. This matters because throttles now re-raise, so Lambda replays the
+# whole event and any revoke that succeeded on the first pass is attempted
+# again. Reporting that as remediation_failed would email a human about a
+# rule the engine had already closed - the same false alarm that grouping
+# violations by rule was introduced to fix, arriving through a different door.
+ALREADY_REVOKED = 'InvalidPermission.NotFound'
+
 _ec2_client = None
 
 
 def _get_client():
     global _ec2_client
     if _ec2_client is None:
-        _ec2_client = boto3.client('ec2')
+        _ec2_client = make_client('ec2')
     return _ec2_client
 
 
@@ -172,9 +181,38 @@ def handle_authorize_sg_ingress(detail: dict) -> dict:
             )
             logger.info('Remediation applied', extra={'sg_id': sg_id, 'action': action})
         except ClientError as exc:
-            remediated = False
-            action = f'Revocation failed: {exc}'
-            logger.error('Remediation failed', extra={'sg_id': sg_id, 'error': str(exc)})
+            if exc.response.get('Error', {}).get('Code', '') == ALREADY_REVOKED:
+                remediated = True
+                label = 'port' if len(ports) == 1 else 'ports'
+                action = (
+                    f"Rule for {rule['cidr']} on {label} "
+                    f"{', '.join(str(p) for p in ports)} was already absent"
+                )
+                logger.info('Rule already revoked', extra={
+                    'sg_id': sg_id,
+                    'action': action,
+                })
+            elif is_throttling_error(exc):
+                # A throttle means the remediation was never attempted, so it is
+                # not a failure. Re-raising fails the invocation, EventBridge
+                # retries it, and it only reaches the DLQ if it keeps failing.
+                # Recording it as remediation_failed would lose that retry and
+                # leave the resource exposed with nobody coming back to it.
+                for port in ports:
+                    publish_throttled(f'SG_OPEN_PORT_{port}', sg_id)
+                logger.warning('Remediation throttled, retrying via event replay', extra={
+                    'sg_id': sg_id,
+                    'error': str(exc),
+                })
+                raise
+
+            else:
+                remediated = False
+                action = f'Revocation failed: {exc}'
+                logger.error('Remediation failed', extra={
+                    'sg_id': sg_id,
+                    'error': str(exc),
+                })
 
         # One metric and one alert per exposed port, each carrying the outcome
         # of the single revoke that covered them all.

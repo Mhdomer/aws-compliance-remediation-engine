@@ -91,19 +91,43 @@ resource "aws_iam_role_policy" "ec2_remediation" {
   name = "ec2-remediation"
   role = aws_iam_role.lambda_exec.id
 
+  # ec2:Describe* does not support resource-level permissions, so those stay on
+  # "*". That is an AWS constraint, not an oversight. Everything that mutates is
+  # scoped to this account and region, and ec2:TerminateInstances is only put in
+  # the policy at all when var.ec2_remediation_action is "terminate" — with the
+  # default the role cannot terminate an instance even if the function asked it to.
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "ec2:DescribeInstances",
-        "ec2:DescribeVolumes",
-        "ec2:TerminateInstances",
-        "ec2:DescribeSecurityGroups",
-        "ec2:RevokeSecurityGroupIngress",
-      ]
-      Resource = "*"
-    }]
+    Statement = [
+      {
+        Sid    = "ReadOnlyDiscovery"
+        Effect = "Allow"
+        Action = [
+          "ec2:DescribeInstances",
+          "ec2:DescribeVolumes",
+          "ec2:DescribeSecurityGroups",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "InstanceRemediation"
+        Effect = "Allow"
+        Action = concat(
+          [
+            "ec2:StopInstances",
+            "ec2:CreateTags",
+          ],
+          var.ec2_remediation_action == "terminate" ? ["ec2:TerminateInstances"] : [],
+        )
+        Resource = "arn:aws:ec2:${var.aws_region}:${data.aws_caller_identity.current.account_id}:instance/*"
+      },
+      {
+        Sid      = "SecurityGroupRemediation"
+        Effect   = "Allow"
+        Action   = ["ec2:RevokeSecurityGroupIngress"]
+        Resource = "arn:aws:ec2:${var.aws_region}:${data.aws_caller_identity.current.account_id}:security-group/*"
+      },
+    ]
   })
 }
 

@@ -327,3 +327,64 @@ class TestAllTrafficProtocol:
         assert permission['IpProtocol'] == '-1'
         assert 'FromPort' not in permission
         assert 'ToPort' not in permission
+
+
+# ─── ipv6 revoke path and module entry point ─────────────────────────────────
+
+IPV6_PERM = {
+    'ipProtocol': 'tcp',
+    'fromPort': 22,
+    'toPort': 22,
+    'ipRanges': {'items': []},
+    'ipv6Ranges': {'items': [{'cidrIpv6': '::/0'}]},
+}
+
+
+class TestIpv6Revoke:
+    @patch('rules.sg_rules.send_alert')
+    @patch('rules.sg_rules.publish_violation')
+    @patch('rules.sg_rules._get_client')
+    def test_ipv6_rule_is_revoked_with_ipv6_ranges(self, mock_factory, mock_metric, mock_alert):
+        mock_ec2 = _aws_like_ec2()
+        mock_factory.return_value = mock_ec2
+
+        from rules.sg_rules import handle_authorize_sg_ingress
+        handle_authorize_sg_ingress(_detail(IPV6_PERM))
+
+        # An IPv6 CIDR has to go in Ipv6Ranges; putting it in IpRanges is
+        # rejected by the API.
+        permission = mock_ec2.sent_permissions[0]
+        assert permission['Ipv6Ranges'] == [{'CidrIpv6': '::/0'}]
+        assert 'IpRanges' not in permission
+
+
+class TestSgEvaluate:
+    def test_unknown_event_returns_no_rule(self):
+        from rules.sg_rules import evaluate
+        result = evaluate('RevokeSecurityGroupIngress', {})
+        assert result['status'] == 'no_rule'
+
+    def test_known_event_is_dispatched(self):
+        from unittest.mock import patch as _patch
+        from rules import sg_rules
+        rule = MagicMock(return_value={'status': 'compliant'})
+
+        # _HANDLERS holds a direct reference, so patching the module attribute
+        # would not change what evaluate() actually calls.
+        with _patch.dict(sg_rules._HANDLERS,
+                         {'AuthorizeSecurityGroupIngress': rule}):
+            result = sg_rules.evaluate('AuthorizeSecurityGroupIngress', {'x': 1})
+
+        rule.assert_called_once_with({'x': 1})
+        assert result['status'] == 'compliant'
+
+    def test_client_is_built_once_and_reused(self):
+        from unittest.mock import patch as _patch
+        from rules import sg_rules
+        sg_rules._ec2_client = None
+        with _patch('boto3.client', return_value=MagicMock()) as make_client:
+            first = sg_rules._get_client()
+            second = sg_rules._get_client()
+        assert first is second
+        from utils.aws_client import CLIENT_CONFIG
+        make_client.assert_called_once_with('ec2', config=CLIENT_CONFIG)
