@@ -1,0 +1,5 @@
+-r requirements-mcp.txt
+
+# Only the optional standalone agent (mcp_server/agent.py) needs this.
+# The MCP server itself runs on your Claude Code subscription and needs no key.
+anthropic>=1.0.0
