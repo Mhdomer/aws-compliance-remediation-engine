@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "compliance-engine": {
+      "command": "python",
+      "args": ["-m", "mcp_server.server"],
+      "env": {
+        "COMPLIANCE_REGION": "us-east-1"
+      }
+    }
+  }
+}
