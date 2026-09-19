@@ -1,6 +1,8 @@
 import os
 
+from utils.cloudwatch_utils import publish_attempt_blocked
 from utils.logger import setup_logger
+from utils.notifier import NOTICE_ATTEMPT_BLOCKED, STATUS_BLOCKED, send_notice
 from rules import s3_rules, ec2_rules, sg_rules
 
 logger = setup_logger(__name__)
@@ -53,6 +55,20 @@ def _is_self_invocation(detail: dict) -> bool:
     return f':assumed-role/{role_name}/' in identity.get('arn', '')
 
 
+def _resource_hint(detail: dict) -> str:
+    """Best-effort resource id for a call that never took effect.
+
+    A rejected call has no responseElements, so the only thing naming the
+    target is whatever the caller asked for.
+    """
+    params = detail.get('requestParameters') or {}
+    for key in ('bucketName', 'groupId', 'instanceId'):
+        value = params.get(key)
+        if value:
+            return value
+    return 'unknown'
+
+
 def lambda_handler(event: dict, context) -> dict:
     source = event.get('source', '')
     detail = event.get('detail', {})
@@ -79,6 +95,48 @@ def lambda_handler(event: dict, context) -> dict:
         return {
             'status': 'ignored',
             'reason': 'self_invocation',
+            'source': source,
+            'event_name': event_name,
+        }
+
+    error_code = detail.get('errorCode', '')
+    if error_code:
+        # CloudTrail records calls AWS rejected, and EventBridge delivers them
+        # with the request parameters intact. Every rule here reads what was
+        # *requested*, so a denied PutBucketAcl still looks like a public
+        # bucket. Remediating it reports an exposure that never existed and
+        # credits the engine for a control that had already worked.
+        #
+        # Not silently dropped: a run of these is what probing looks like, and
+        # the actor is the only thing that says who. It is a notice rather than
+        # an alert because nothing was found — the same line send_notice()
+        # already draws for exemptions and undetermined checks.
+        resource_id = _resource_hint(detail)
+        actor = detail.get('userIdentity', {}).get('arn', 'unknown')
+
+        logger.warning('Dropping API call that AWS rejected', extra={
+            'source': source,
+            'event_name': event_name,
+            'error_code': error_code,
+            'resource_id': resource_id,
+            'actor': actor,
+            'request_id': request_id,
+        })
+        publish_attempt_blocked(event_name, resource_id, error_code)
+        send_notice(
+            NOTICE_ATTEMPT_BLOCKED,
+            resource_id,
+            actor,
+            f'{event_name} was rejected by AWS with {error_code}. '
+            'Nothing was changed and nothing was remediated. '
+            f'Reported because a repeated pattern of these is worth reviewing: '
+            f'{detail.get("errorMessage", "")}'.strip(),
+            STATUS_BLOCKED,
+        )
+        return {
+            'status': 'ignored',
+            'reason': 'failed_api_call',
+            'error_code': error_code,
             'source': source,
             'event_name': event_name,
         }

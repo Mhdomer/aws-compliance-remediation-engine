@@ -149,3 +149,82 @@ class TestSgIngress:
         permission = kwargs['IpPermissions'][0]
         assert permission['FromPort'] == 22
         assert permission['IpRanges'] == [{'CidrIp': '0.0.0.0/0'}]
+
+
+class TestFailedApiCallsAreNotViolations:
+    """CloudTrail records calls AWS rejected, and EventBridge delivers them.
+
+    Found on a real deployment, 2026-09-19. A put-bucket-acl that Block Public
+    Access refused still produced a CloudTrail event carrying
+    x-amz-acl=public-read, so the engine read the *requested* ACL, called it a
+    violation, applied PutPublicAccessBlock and incremented both
+    ViolationsDetected and RemediationsApplied. The bucket was never public and
+    the call never succeeded.
+
+    None of the other fixtures carry an errorCode, so nothing in the suite
+    could have caught this: every recorded event was a success.
+
+    A rejected attempt is still worth telling a human about. It is just not a
+    finding, and it must never be counted as one - the same distinction
+    send_notice() already draws for exemptions and undetermined checks.
+    """
+
+    def test_denied_call_never_reaches_a_rule(self):
+        import handler
+        event = load('s3_put_bucket_acl_denied_event.json')
+        assert event['detail']['errorCode'] == 'AccessDenied'
+
+        spy = MagicMock()
+        with patch.dict(handler._RULE_REGISTRY,
+                        {('aws.s3', 'PutBucketAcl'): spy}):
+            with patch('handler.publish_attempt_blocked'), \
+                 patch('handler.send_notice'):
+                result = handler.lambda_handler(event, None)
+
+        spy.assert_not_called()
+        assert result['status'] == 'ignored'
+        assert result['reason'] == 'failed_api_call'
+        assert result['error_code'] == 'AccessDenied'
+
+    def test_denied_call_publishes_an_attempt_metric_not_a_violation(self):
+        import handler
+        event = load('s3_put_bucket_acl_denied_event.json')
+
+        with patch('handler.publish_attempt_blocked') as attempt, \
+             patch('handler.send_notice') as notice, \
+             patch('rules.s3_rules.publish_violation') as violation:
+            handler.lambda_handler(event, None)
+
+        # The denial means the existing controls worked. Counting it in
+        # ViolationsDetected would report an exposure that never happened.
+        violation.assert_not_called()
+        attempt.assert_called_once()
+        assert attempt.call_args.args[0] == 'PutBucketAcl'
+        notice.assert_called_once()
+
+    def test_the_notice_carries_the_actor(self):
+        import handler
+        event = load('s3_put_bucket_acl_denied_event.json')
+
+        with patch('handler.publish_attempt_blocked'), \
+             patch('handler.send_notice') as notice:
+            handler.lambda_handler(event, None)
+
+        # Someone probing an account generates these. Without the principal
+        # the notice says an attempt happened and not who made it.
+        assert 'developer' in str(notice.call_args)
+
+    def test_a_successful_call_still_reaches_its_rule(self):
+        import handler
+        event = load('s3_public_acl_event.json')
+        assert 'errorCode' not in event['detail']
+
+        spy = MagicMock(return_value={'status': 'remediated'})
+        with patch.dict(handler._RULE_REGISTRY,
+                        {('aws.s3', 'PutBucketAcl'): spy}):
+            result = handler.lambda_handler(event, None)
+
+        # The guard must key on errorCode alone. Widening it to anything else
+        # would stop real violations from being remediated.
+        spy.assert_called_once()
+        assert result['status'] == 'remediated'

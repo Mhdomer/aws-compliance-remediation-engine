@@ -136,6 +136,41 @@ def publish_throttled(check_type: str, resource_id: str) -> None:
         })
 
 
+def publish_attempt_blocked(event_name: str, resource_id: str, error_code: str) -> None:
+    """Record an API call AWS itself rejected.
+
+    Deliberately not ViolationsDetected. CloudTrail logs failed calls and
+    EventBridge delivers them, so a PutBucketAcl that Block Public Access
+    refused arrives looking exactly like one that succeeded — same
+    requestParameters, same x-amz-acl. Counting it as a violation reports an
+    exposure that never happened and takes credit for a control that had
+    already done its job.
+
+    It still gets a metric, because a run of these is what probing looks like.
+    """
+    now = datetime.now(timezone.utc)
+
+    metric = {
+        'MetricName': 'ViolationAttemptsBlocked',
+        'Dimensions': [
+            {'Name': 'EventName', 'Value': event_name},
+            {'Name': 'ErrorCode', 'Value': error_code},
+        ],
+        'Value': 1,
+        'Unit': 'Count',
+        'Timestamp': now,
+    }
+
+    try:
+        _get_client().put_metric_data(Namespace=NAMESPACE, MetricData=[metric])
+    except Exception as exc:
+        logger.error('Failed to publish CloudWatch metrics', extra={
+            'event_name': event_name,
+            'resource_id': resource_id,
+            'error': str(exc),
+        })
+
+
 def publish_exemption_rejected(check_type: str, resource_id: str, reason: str) -> None:
     """Record an exemption someone asked for that did not hold.
 

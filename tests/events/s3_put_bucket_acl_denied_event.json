@@ -1,0 +1,38 @@
+{
+  "version": "0",
+  "id": "a12b3c4d-5678-90ab-cdef-EXAMPLE44444",
+  "source": "aws.s3",
+  "account": "123456789012",
+  "time": "2026-09-19T12:25:07Z",
+  "region": "us-east-1",
+  "detail-type": "AWS API Call via CloudTrail",
+  "detail": {
+    "eventVersion": "1.11",
+    "userIdentity": {
+      "type": "IAMUser",
+      "principalId": "AIDACKCEVSQ6C2EXAMPLE",
+      "arn": "arn:aws:iam::123456789012:user/developer",
+      "accountId": "123456789012",
+      "accessKeyId": "AKIAIOSFODNN7EXAMPLE",
+      "userName": "developer"
+    },
+    "eventTime": "2026-09-19T12:25:07Z",
+    "eventSource": "s3.amazonaws.com",
+    "eventName": "PutBucketAcl",
+    "awsRegion": "us-east-1",
+    "sourceIPAddress": "203.0.113.0",
+    "userAgent": "aws-cli/2.0.0",
+    "errorCode": "AccessDenied",
+    "errorMessage": "User: arn:aws:iam::123456789012:user/developer is not authorized to perform: s3:PutBucketAcl on resource: \"arn:aws:s3:::my-sensitive-data-bucket\" because public ACLs are prevented by the BlockPublicAcls setting in S3 Block Public Access.",
+    "requestParameters": {
+      "bucketName": "my-sensitive-data-bucket",
+      "Host": "my-sensitive-data-bucket.s3.us-east-1.amazonaws.com",
+      "acl": "",
+      "x-amz-acl": "public-read"
+    },
+    "responseElements": null,
+    "readOnly": false,
+    "eventType": "AwsApiCall",
+    "_comment": "Captured from a live account on 2026-09-19. A real PutBucketAcl that AWS REJECTED: Block Public Access refused the public-read ACL, so the bucket was never public. CloudTrail logs failed calls and EventBridge delivers them, so the engine receives this exactly like a successful one. Account id, bucket name, principal id and user name are sanitised; errorCode, errorMessage and requestParameters are verbatim."
+  }
+}
