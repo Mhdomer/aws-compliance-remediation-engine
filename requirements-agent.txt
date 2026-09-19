@@ -3,3 +3,7 @@
 # Only the optional standalone agent (mcp_server/agent.py) needs this.
 # The MCP server itself runs on your Claude Code subscription and needs no key.
 anthropic>=1.0.0
+
+# Alternative free client: Groq free tier or a local Ollama.
+# See docs/free-agent-guide.md (local).
+openai>=1.0.0

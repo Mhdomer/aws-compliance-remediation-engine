@@ -31,6 +31,9 @@ is empty.** Per the vault's root `CLAUDE.md`, this is the most fully built of th
 - **Never commit** `docs/deployment-log.md`, `docs/explain-like-im-5.md`,
   `docs/pending-commits.md`, `docs/mcp-build-plan.md`, or
   `Interview Technical Deep Dive.md` (all gitignored).
+- **`mcp_server/free_agent.py` runs the same tools for free** via Groq's free
+  tier or a local Ollama. Its tool schemas are derived from the MCP server, not
+  hand-written: a hand-written draft silently offered 4 of 6 tools.
 - **`mcp_server/agent.py` is the only thing here that costs money to run.**
   It calls the Anthropic API. Never run it to "check something works" —
   its tests mock the API entirely.
@@ -69,7 +72,7 @@ registry entry in `handler.py` + a module + an EventBridge rule + a matching
 
 ```bash
 python -m pytest -q --cov=src/lambda --cov=scripts   # coverage report
-python -m pytest -q                                  # 325 tests
+python -m pytest -q                                  # 340 tests
 cd infrastructure && terraform test                  # 25 tests, no credentials
 cd infrastructure && terraform validate
 cd infrastructure && terraform fmt -check -recursive
