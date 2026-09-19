@@ -209,6 +209,44 @@ gitignored) because it is the "built and defended" evidence the vault CLAUDE.md
 says these projects lack. If he asks for interview prep material, start there
 rather than re-deriving it.
 
+## Releases
+
+`v1.0.0` exists on GitHub, tagged at `987a49b`. It covers the eight-issue review
+pass and MCP phases 1-4. It **predates `mcp_server/free_agent.py`**, so do not
+describe the free agent as part of it.
+
+The tag sitting behind `main` is normal: a release is a snapshot, `main` moves on.
+
+### Cutting the next one
+
+```bash
+git tag -a v1.1.0 -m "short summary"
+git push origin v1.1.0
+```
+
+Then write the release notes on GitHub. `docs/pending-commits.md` and
+`docs/engineering-log.md` are the raw material - the log entries are already in
+"what broke and why it mattered" form, which reads well in release notes.
+
+Candidates for `v1.1.0`: the free agent, the four follow-up tasks (rate limiting
+and the throttle/failure split, exemption expiry, the load-test analysis, the
+trail/registry coupling test).
+
+### Gotcha, learned the hard way
+
+**A tag can keep deleted history alive.** When history was rewritten to strip a
+private file, `git filter-repo` rewrote every local ref - but `v1.0.0` existed
+only on GitHub, so it was never rewritten, and `git push --force origin main`
+does not touch tags. The old commits stayed reachable through the tag, including
+the file the rewrite was supposed to remove.
+
+Worse, checking the *local* repo showed the file as gone, because the objects had
+been pruned locally. It was only visible by cloning from GitHub and running
+`git ls-remote origin` to see every published ref.
+
+If history is ever rewritten again: enumerate `git ls-remote origin` afterwards,
+not `git log` locally, and re-point or delete every tag.
+
 ## Gotchas in this working copy
 
 - **`.gitignore` had no trailing newline.** Appending a pattern concatenated it
