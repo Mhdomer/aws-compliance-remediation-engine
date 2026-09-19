@@ -69,12 +69,17 @@ variable "create_mcp_reader_policy" {
 }
 
 variable "lambda_reserved_concurrency" {
-  description = "Maximum concurrent executions of the remediation function. Lambda already queues asynchronous invocations and retries throttled ones for up to six hours; running unreserved bypasses that buffer, so a burst of violations becomes a burst of concurrent AWS API calls. 10 keeps the engine near the slowest EC2 token bucket refill rate (5/sec for RevokeSecurityGroupIngress and StopInstances) while still clearing a 50-violation burst in about ten seconds. Must not be 0, which disables the function entirely rather than limiting it."
+  description = "Maximum concurrent executions of the remediation function. Lambda already queues asynchronous invocations and retries throttled ones for up to six hours; running unreserved bypasses that buffer, so a burst of violations becomes a burst of concurrent AWS API calls. 10 keeps the engine near the slowest EC2 token bucket refill rate (5/sec for RevokeSecurityGroupIngress and StopInstances) while still clearing a 50-violation burst in about ten seconds. Must not be 0, which disables the function entirely rather than limiting it. Use -1 to reserve nothing, which is the only option on an account whose total concurrency quota is 10: AWS requires 10 executions to remain unreserved, so any positive reservation is rejected."
   type        = number
   default     = 10
 
+  # -1 is the provider's "no reservation". It is deliberately not the default:
+  # the cap is a blast-radius control and should have to be given up on
+  # purpose. But a new AWS account's total concurrency quota is 10, and AWS
+  # refuses any reservation that would leave fewer than 10 unreserved, so on
+  # such an account every positive value here fails the apply outright.
   validation {
-    condition     = var.lambda_reserved_concurrency > 0
-    error_message = "lambda_reserved_concurrency must be greater than 0. A value of 0 disables the function completely rather than throttling it."
+    condition     = var.lambda_reserved_concurrency > 0 || var.lambda_reserved_concurrency == -1
+    error_message = "lambda_reserved_concurrency must be greater than 0, or -1 to reserve nothing. A value of 0 disables the function completely rather than throttling it."
   }
 }

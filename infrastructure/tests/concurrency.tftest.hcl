@@ -90,3 +90,24 @@ run "throttled_remediations_are_alarmed_on" {
     error_message = "throttled remediations need their own alarm: they mean the engine is outrunning the account's API limits"
   }
 }
+
+run "unreserved_is_expressible_when_the_account_quota_forbids_a_reservation" {
+  command = apply
+
+  variables {
+    lambda_reserved_concurrency = -1
+  }
+
+  # An account whose total concurrency quota is 10 cannot reserve anything.
+  # AWS requires at least 10 unreserved executions to remain, so
+  # reserved <= quota - 10 = 0, and 0 disables the function rather than
+  # capping it. -1 is the provider's "no reservation".
+  #
+  # Every other run here asserts what the value *is*. None of them could
+  # catch this, because mock_provider has no account quota to violate:
+  # a real apply returns InvalidParameterValueException and these still pass.
+  assert {
+    condition     = aws_lambda_function.compliance_engine.reserved_concurrent_executions == -1
+    error_message = "the module must be able to express 'do not reserve': on a default-quota account every positive value is rejected by AWS and 0 disables the function"
+  }
+}
