@@ -63,6 +63,8 @@ A full per-service breakdown is in [docs/services-explained.md](docs/services-ex
 ├── mcp_server/              # Read-only MCP server (the AI layer)
 │   ├── server.py            #   registers six tools over stdio
 │   ├── aws_clients.py       #   the one read-only client factory
+│   ├── free_agent.py        #   unattended loop, Groq or local Ollama ($0)
+│   ├── agent.py             #   unattended loop, Anthropic (paid)
 │   └── tools/               #   one module per question the tools answer
 ├── infrastructure/          # Terraform (all AWS resources)
 │   └── tests/               #   .tftest.hcl suites, fully mocked
@@ -173,10 +175,24 @@ violations" rather than "wrong region". Set it to `aws_region` from your tfvars.
 > *calls `get_resource_history` for what the engine logged, `get_resource_state`
 > for whether the rule is still open, and answers with both*
 
-### Optional: the standalone agent
+### Optional: running it unattended
 
-`mcp_server/agent.py` runs the same tools in a loop with no human in it, so the
-engine can be queried from a schedule or an event rather than a chat window.
+The MCP server above is driven by a human in a chat window. Two agents run the
+same tools in a loop with nobody watching, so the engine can be queried from a
+schedule or an event.
+
+**Free** — `mcp_server/free_agent.py`, via Groq's free tier or a fully local
+Ollama:
+
+```bash
+pip install openai
+export COMPLIANCE_REGION=us-east-1
+export GROQ_API_KEY=...                  # omit to use local Ollama instead
+python -m mcp_server.free_agent "anything exempted this week?"
+```
+
+**Paid** — `mcp_server/agent.py`, via the Anthropic API. The only thing in this
+project that costs money per run:
 
 ```bash
 pip install -r requirements-agent.txt
@@ -184,15 +200,15 @@ export ANTHROPIC_API_KEY=...
 python -m mcp_server.agent "anything exempted this week?"
 ```
 
-**This is the only part of the project that costs money to run**, because it
-calls the Anthropic API directly. The MCP server above runs on your existing
-Claude Code subscription and needs no key. Nothing spends anything at import
-time or under test — the API is mocked throughout the test suite.
+Both read their tool definitions from the MCP server rather than redeclaring
+them, so adding a tool there makes it available to both with no second list to
+keep in sync. That is not incidental: a hand-written tool list for the free
+agent declared four of the six tools, which fails silently, because a model
+never calls a tool it was not told about.
 
-It reads its tool definitions from the MCP server rather than redeclaring them,
-so adding a tool there makes it available here with no second list to keep in
-sync. The loop is capped at eight turns: a model that keeps calling tools must
-not run indefinitely on an API budget.
+Both loops are capped at eight turns. Neither spends anything at import time or
+under test — the APIs are mocked throughout, and both SDKs are imported lazily,
+so the modules and their tests work without either installed.
 
 ### Tests
 
