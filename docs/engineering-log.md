@@ -120,6 +120,24 @@ about that: moto returns `running` with the mappings already populated. What I
 could test exhaustively was the code's response to an empty list, which is where
 the bug lives.
 
+**Confirmed on a live account, 2026-09-19.** The window is real. `RunInstances`
+came back with the instance `pending` and the mappings empty:
+
+```
+i-0e90984ff035b692d   pending   BlockDeviceMappings: []
+```
+
+That empty list is what CloudTrail puts in `responseElements`, so a rule reading
+the event payload would hit this on every launch. Mine does not. It calls
+`describe_instances` fresh, and by the time the Lambda ran, roughly eight seconds
+after launch, the mappings were populated. Detection returned
+`EC2_UNENCRYPTED_EBS` rather than undetermined and `DetectionsUndetermined`
+stayed at zero.
+
+So the race exists and the re-describe is what steps around it. That was not a
+decision I made for this reason, it is how I happened to write it. It is a
+decision now, and the reason is written down.
+
 **What I changed.** Three verdicts instead of two: unencrypted, encrypted, or
 **undetermined**. Every path that cannot see the data returns undetermined, and
 undetermined is neither remediated nor counted as a violation. It gets its own
@@ -284,6 +302,25 @@ nothing.
 It fails **open** when the variable is unset. A missing env var degrading to the
 old behaviour is survivable. One that silently drops every event is a detection
 control that looks alive and does nothing.
+
+**Confirmed on a live account, 2026-09-19.** I deployed this and put AES256
+encryption on a bucket. The engine remediated to KMS, its own
+`PutBucketEncryption` arrived back 6.5 seconds later, and the guard dropped it.
+The ARNs on that event:
+
+```
+userIdentity.arn  : arn:aws:sts::...:assumed-role/compliance-engine-test-lambda-role/compliance-engine-test
+sessionIssuer.arn : arn:aws:iam::...:role/compliance-engine-test-lambda-role
+ENGINE_ROLE_ARN   : arn:aws:iam::...:role/compliance-engine-test-lambda-role
+```
+
+`sessionIssuer.arn` matches exactly. `userIdentity.arn` is a different string and
+no comparison against it could ever have been true. I had worked that out from
+the documentation and hand-built fixtures; this is the first time I have seen the
+real record say it. The loop stopped after one pass.
+
+The other direction is worth noting too. My own IAM user's events carry no
+`sessionContext` at all, which is the case the fallback branch exists for.
 
 **What I took from it.** Loop-freedom was an accident of two unrelated pieces of
 code agreeing. I made it structural. Also: the guard creates a blind spot, since
@@ -598,6 +635,154 @@ got it wrong", and if the answer is "nothing", it is not guarded.
 
 ---
 
+## 13. "Attempted" and "succeeded" were the same value
+
+**What I assumed.** CloudTrail delivers mutating API calls that happened in AWS.
+If an event has `eventName: PutBucketAcl` and `requestParameters: {x-amz-acl: public-read}`,
+a caller put a public ACL on the bucket.
+
+**What was actually happening.** CloudTrail records API calls that AWS *rejected*,
+and EventBridge delivers them to the default event bus with the caller's
+`requestParameters` intact. When S3 Block Public Access rejected a `PutBucketAcl`
+call with `AccessDenied`, the bucket was never public. But my handler inspected
+only what was requested, saw `public-read`, logged a violation, applied
+`PutPublicAccessBlock`, published `ViolationsDetected = 1` and
+`RemediationsApplied = 1`, and would have sent an alert email. The engine
+reported an exposure that never happened and took credit for remediating a
+control that AWS had already enforced.
+
+**How I found out.** Deploying to a live AWS account on 2026-09-19. I attempted a
+`public-read` ACL on a fresh bucket before disabling S3 Block Public Access. AWS
+rejected the call with `AccessDenied`. When I checked CloudWatch metrics,
+`ViolationsDetected` was 2.0 and `RemediationsApplied` was 2.0 for a test where I
+only exposed the bucket once. The extra count was the failed attempt.
+
+**What I changed.** `lambda_handler` now inspects `detail.get('errorCode')`. When
+present, the API call failed before taking effect. Instead of dispatching to
+rule evaluators, the handler drops the event, logs at WARNING with the actor,
+publishes a `ViolationAttemptsBlocked` metric (dimensioned by `EventName` and
+`ErrorCode`), and sends an operational notice via
+`send_notice(NOTICE_ATTEMPT_BLOCKED, ..., STATUS_BLOCKED)`.
+
+**What I took from it.** The engine's recurring theme was "nothing found" and "could
+not look" must never be the same value. This was the same failure mode pointing
+the other direction: "attempted" and "succeeded" must never be the same value.
+CloudTrail is an audit log of requests, not just successful state transitions.
+Treating requested parameters as ground truth without checking `errorCode` turns
+an attacker's failed probing into false compliance victories.
+
+---
+
+## 14. 340 tests passed while every violation log line lost its fields
+
+**What I assumed.** My logging tests proved that violations logged as structured
+JSON with the actor, resource ID, and violation type ready for CloudWatch Logs
+Insights.
+
+**What was actually happening.** In production, every violation log line arrived
+in CloudWatch as an unstructured string: `[WARNING] ... Violation detected`.
+The actor, violation type, CIDR, and resource ID were completely missing. Even
+worse, all 5 `logger.info` lines in the rule modules — including the replay-safety
+log line when a security group rule was already revoked — were silently
+discarded and never reached CloudWatch at all.
+
+**How I found out.** Looking at the real CloudWatch log stream during the live
+security group remediation test. The handler's own logs were valid JSON, but the
+rule module's WARNING had no fields.
+
+**What was actually wrong.** `handler.py` called `setup_logger(__name__)`, which
+attaches `StructuredFormatter` and sets `propagate = False`. But all three rule
+modules (`sg_rules.py`, `s3_rules.py`, `ec2_rules.py`) called bare
+`logging.getLogger(__name__)`. In Lambda's runtime, unconfigured loggers inherit
+the root logger, which defaults to `WARNING` (dropping `INFO` calls) and renders
+only `%(message)s` (dropping `extra={...}`).
+
+**Why 340 unit tests missed it.** `test_logger.py` created a
+`LogRecord(name='rules.s3_rules')` by hand and passed it into a manually
+instantiated `StructuredFormatter()`. It tested that the formatter worked if
+called, but never tested that the rule modules actually used that formatter. And
+in the rule unit tests, assertions read `record.actor` directly off the Python
+`LogRecord` object, which is populated in memory regardless of how any handler
+renders it.
+
+**What I changed.** Replaced `logging.getLogger(__name__)` with
+`setup_logger(__name__)` across `sg_rules.py`, `s3_rules.py`, and `ec2_rules.py`.
+Added a test in `test_logger.py` that inspects the real loggers on those three
+modules and asserts they have a `StructuredFormatter` handler and
+`propagate = False`.
+
+---
+
+## 15. The module could not deploy to a default-quota AWS account
+
+**What I assumed.** `lambda_reserved_concurrency` defaults to 10 to pace
+remediations near the EC2 token bucket refill rate. A validation condition
+`var.lambda_reserved_concurrency > 0` ensured users could not pass 0 (which
+disables the function).
+
+**What was actually happening.** On a newer AWS account, the total Lambda
+concurrency quota is 10, not 1000. AWS enforces that at least 10 executions
+must remain unreserved. Therefore, unreserved = 10 - reserved >= 10 forces
+reserved <= 0. Every positive reservation is rejected by AWS with
+`InvalidParameterValueException`. And because 0 disables the function, no legal
+value existed for this variable on such an account.
+
+**How I found out.** The first `terraform apply` against real AWS failed with
+`PutFunctionConcurrency: InvalidParameterValueException`.
+
+**What I changed.** Relaxed validation to allow `-1` (the provider's sentinel for
+"no reservation"), documented the quota constraint, and added a terraform test
+asserting that `-1` is expressible. On such accounts, the account quota itself
+already enforces the pacing.
+
+---
+
+## 16. The rule guarded a door AWS had already welded shut
+
+**What I assumed.** `PutBucketAcl` with a public canned ACL is how a bucket
+becomes public, so watching that event covers the exposure.
+
+**What was actually happening.** I created a plain bucket on a live account to
+exercise the rule and could not make it public at all:
+
+```
+AccessDenied: ... because public ACLs are prevented by the BlockPublicAcls
+setting in S3 Block Public Access.
+```
+
+Every bucket created since April 2023 arrives with Block Public Access fully on
+and `ObjectOwnership: BucketOwnerEnforced`, which disables ACLs outright. To
+produce the violation my rule watches for, I had to make two calls first:
+
+```
+DeleteBucketPublicAccessBlock
+PutBucketOwnershipControls   (BucketOwnerEnforced -> ObjectWriter)
+```
+
+Neither is in `_RULE_REGISTRY`. Both are write management events the trail
+already logs, so they reach EventBridge. Nothing is listening for them.
+
+**Why that matters.** The realistic path to a public bucket in a current account
+does not begin with the event I watch. It begins with the two calls that take the
+protections off, and by the time `PutBucketAcl` fires the account has already
+been weakened, with nothing raised in between. My rule is the last line, and I
+had been describing it as the detection.
+
+**What I have not changed yet.** Adding these is a registry entry, a module, an
+EventBridge rule and a matching `aws_lambda_permission` for each. I am recording
+it rather than half doing it, because disabling Block Public Access is not
+automatically a violation the way a public ACL is. Some buckets legitimately need
+ACLs back on. The right shape is probably a notice carrying the actor rather than
+a remediation, and that deserves its own thinking instead of being bolted on at
+the end of a deployment session.
+
+**What I took from it.** I wrote this rule against how S3 behaved when I learned
+S3, and AWS moved the defaults underneath it. Deploying to a real account was the
+only thing that was going to tell me. Every fixture I had was a successful
+`PutBucketAcl`, which is a call a default bucket in 2026 will not even accept.
+
+---
+
 ## The things I would tell myself at the start
 
 **"Nothing found" and "I could not look" must never be the same value.** This is
@@ -606,12 +791,20 @@ prerequisite script, in the exemption lookup, and in the MCP tools I wrote later
 Every tool I have written since returns a warning when an empty result is
 ambiguous, instead of an empty success.
 
+**"Attempted" and "succeeded" must never be the same value.** CloudTrail logs
+failed calls and EventBridge delivers them. Reading what was requested without
+checking `errorCode` turns failed attacks into false remediation credits.
+
 **A control's exception path needs more logging than its happy path.** Exemptions,
 errors, skips. Those are the paths someone evading the control will take, and
 they were the quietest paths in my code.
 
 **Check whether the remediation fixed the violation, not whether it ran.**
 Terminating an instance ran perfectly and fixed nothing.
+
+**Test the wiring, not just the component.** A formatter test that constructs the
+formatter by hand proves the class works; it does not prove any module uses it.
+A test that checks what a terraform value *is* does not prove AWS will accept it.
 
 **Test the guard, not just with the guard.** After writing each safety check I
 deliberately broke the thing it protects to confirm it fails. The read-only IAM
@@ -638,9 +831,15 @@ Honest list of what this project does not do yet.
   one invocation. A large `RunInstances` will time out and replay. See entry 10.
 - Exemptions have no expiry. A resource tagged exempt stays exempt forever, and
   the right design is probably a date the tag stops being honoured.
-- I have still never load-tested this, but the gap is now measured rather than
-  vague: `scripts/load_test.py` says what it would create, what it would cost
-  (about a cent), and what it would actually tell me. See entry 11.
+- I have still never load-tested this under sustained traffic, but the
+  deployment gap is closed: on 2026-09-19 it ran on a real account and every rule
+  was driven end to end. Measured CloudTrail-to-Lambda delivery latency was 3.5s
+  to 6s for EC2 and security groups and 8s to 9.5s for S3. A cold invocation took
+  2530ms and used 109MB of the 256MB allocated, so the memory setting has more
+  headroom than it needs. EC2 remediation stopped and tagged the instance and did
+  not terminate it, with `ec2:TerminateInstances` absent from the deployed role.
+- The engine watches `PutBucketAcl` but not the two calls that make a public ACL
+  possible on a current account. See entry 16.
 - Exemptions now expire, but nothing reminds anyone before they do. A resource
   silently starts being checked again on the expiry date, and the owner finds
   out from a remediation rather than a warning.

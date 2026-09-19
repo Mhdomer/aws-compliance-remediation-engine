@@ -12,7 +12,7 @@ compliance violation, auto-remediates it, publishes a CloudWatch metric, and
 sends an SNS alert.
 
 It is a portfolio project aimed at Cloud Security / DevSecOps interviews. It has
-been deployed to real AWS twice and torn down both times. **The terraform state
+been deployed to real AWS three times and torn down each time. **The terraform state
 is empty.** Per the vault's root `CLAUDE.md`, this is the most fully built of the
 "Projects Idea" set, and one of only two that survive an interviewer asking
 "what actually broke and how did you fix it."
@@ -72,8 +72,8 @@ registry entry in `handler.py` + a module + an EventBridge rule + a matching
 
 ```bash
 python -m pytest -q --cov=src/lambda --cov=scripts   # coverage report
-python -m pytest -q                                  # 340 tests
-cd infrastructure && terraform test                  # 25 tests, no credentials
+python -m pytest -q                                  # 348 tests
+cd infrastructure && terraform test                  # 26 tests, no credentials
 cd infrastructure && terraform validate
 cd infrastructure && terraform fmt -check -recursive
 ```
@@ -202,12 +202,24 @@ issue 1 which is commit `45597c1`. Commit messages and per-issue paths are in
 `docs/pending-commits.md`.
 
 ## docs/engineering-log.md
+A first-person write-up of sixteen bugs found across the review pass and live AWS
+deployment sessions: what was assumed, what was actually happening, how it was found,
+what changed. Tracked (not gitignored) because it is the "built and defended"
+evidence the vault CLAUDE.md says these projects lack. If he asks for interview prep
+material, start there rather than re-deriving it.
 
-A first-person write-up of nine bugs found in the review pass: what was assumed,
-what was actually happening, how it was found, what changed. Tracked (not
-gitignored) because it is the "built and defended" evidence the vault CLAUDE.md
-says these projects lack. If he asks for interview prep material, start there
-rather than re-deriving it.
+## Known gap — S3 rule coverage
+
+The engine watches `PutBucketAcl`, but a bucket created on a current account
+cannot accept a public ACL: since April 2023 every new bucket has Block Public
+Access fully on and `ObjectOwnership: BucketOwnerEnforced`, which disables ACLs.
+Making a bucket public now takes `DeleteBucketPublicAccessBlock` and
+`PutBucketOwnershipControls` first, and **neither is in `_RULE_REGISTRY`**.
+
+Confirmed on a live account 2026-09-19. Written up as entry 16 in
+`docs/engineering-log.md`, deliberately not fixed: turning BPA off is not
+automatically a violation the way a public ACL is, so the right shape is probably
+a notice rather than a remediation. Decide that before adding the rules.
 
 ## Releases
 
