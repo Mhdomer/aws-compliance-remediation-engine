@@ -228,9 +228,10 @@ Then write the release notes on GitHub. `docs/pending-commits.md` and
 `docs/engineering-log.md` are the raw material - the log entries are already in
 "what broke and why it mattered" form, which reads well in release notes.
 
-Candidates for `v1.1.0`: the free agent, the four follow-up tasks (rate limiting
-and the throttle/failure split, exemption expiry, the load-test analysis, the
-trail/registry coupling test).
+`v1.0.0` already contains the four follow-up tasks (rate limiting and the
+throttle/failure split, exemption expiry, the load-test analysis, the
+trail/registry coupling test) - they were committed before the tag. Check
+`git log v<tag>..main` before writing notes rather than assuming.
 
 ### Gotcha, learned the hard way
 
