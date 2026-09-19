@@ -1,6 +1,8 @@
 import json
 import logging
 
+import pytest
+
 
 def _record(**extra) -> logging.LogRecord:
     record = logging.LogRecord(
@@ -93,3 +95,55 @@ class TestSetupLogger:
         from utils.logger import setup_logger
         # Lambda's own root handler would otherwise print every record twice.
         assert setup_logger('test.propagate').propagate is False
+
+
+class TestRuleModulesActuallyUseTheStructuredLogger:
+    """The formatter tests above build a StructuredFormatter by hand and prove
+    it works. They do not prove any module's logger *uses* it.
+
+    A rule module that calls logging.getLogger() instead of setup_logger()
+    still sets record.actor, so every caplog assertion in the rule tests keeps
+    passing. What changes is the rendering: with no handler of its own the
+    record propagates to Lambda's root handler, which formats %(message)s and
+    drops every extra= field. Confirmed against a real deployment on
+    2026-09-19, where a live SG violation logged the bare string
+    "Violation detected" with no violation type, no resource id and no actor.
+    """
+
+    RULE_MODULES = ('rules.sg_rules', 'rules.s3_rules', 'rules.ec2_rules')
+
+    @pytest.mark.parametrize('module_name', RULE_MODULES)
+    def test_violation_extras_survive_rendering(self, module_name):
+        import importlib
+        from utils.logger import StructuredFormatter
+
+        logger = importlib.import_module(module_name).logger
+
+        assert logger.handlers, (
+            f'{module_name} configures no handler of its own, so its records '
+            "propagate to Lambda's root handler, which renders only the "
+            'message and discards every extra= field including the actor'
+        )
+
+        formatter = logger.handlers[0].formatter
+        assert isinstance(formatter, StructuredFormatter), (
+            f'{module_name} does not render through StructuredFormatter, so '
+            'its extra= fields never become Logs Insights queryable fields'
+        )
+        assert logger.propagate is False, (
+            f'{module_name} propagates to root, so Lambda logs each record '
+            'twice: once structured, once as a bare string'
+        )
+
+        record = logger.makeRecord(
+            logger.name, logging.WARNING, __file__, 1,
+            'Violation detected', (), None,
+        )
+        record.violation = 'SG_OPEN_PORT_22'
+        record.actor = 'arn:aws:iam::1:user/dev'
+        entry = json.loads(formatter.format(record))
+
+        # The actor is the compensating control for the self-invocation
+        # guard's blind spot. If it does not reach CloudWatch it does not exist.
+        assert entry['violation'] == 'SG_OPEN_PORT_22'
+        assert entry['actor'] == 'arn:aws:iam::1:user/dev'

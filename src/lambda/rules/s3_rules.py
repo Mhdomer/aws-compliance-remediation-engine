@@ -1,4 +1,3 @@
-import logging
 import os
 
 import boto3
@@ -18,6 +17,7 @@ from utils.cloudwatch_utils import (
     publish_throttled,
     publish_violation,
 )
+from utils.logger import setup_logger
 from utils.notifier import (
     NOTICE_EXEMPTION,
     STATUS_EXEMPTION,
@@ -25,7 +25,7 @@ from utils.notifier import (
     send_notice,
 )
 
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
 
 PUBLIC_GRANTEE_URIS = {
     'http://acs.amazonaws.com/groups/global/AllUsers',

@@ -1,13 +1,12 @@
-import logging
-
 import boto3
 from botocore.exceptions import ClientError
 
 from utils.aws_client import is_throttling_error, make_client
 from utils.cloudwatch_utils import publish_throttled, publish_violation
+from utils.logger import setup_logger
 from utils.notifier import send_alert
 
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
 
 # Ports that must never be open to the public internet
 RESTRICTED_PORTS = {22, 3389}

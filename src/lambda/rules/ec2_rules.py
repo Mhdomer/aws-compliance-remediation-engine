@@ -1,4 +1,3 @@
-import logging
 import os
 from datetime import datetime, timezone
 
@@ -20,6 +19,7 @@ from utils.cloudwatch_utils import (
     publish_throttled,
     publish_violation,
 )
+from utils.logger import setup_logger
 from utils.notifier import (
     NOTICE_EXEMPTION,
     NOTICE_UNDETERMINED,
@@ -29,7 +29,7 @@ from utils.notifier import (
     send_notice,
 )
 
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
 
 # Terminating does not remediate this violation. The finding is an unencrypted
 # EBS volume; termination destroys the compute and, when DeleteOnTermination is
