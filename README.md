@@ -21,14 +21,60 @@ Every action is logged, measured on a live dashboard, and alerted to a security 
 
 ## Architecture at a Glance
 
+```mermaid
+flowchart TD
+    API["AWS API call<br/>PutBucketAcl - PutBucketEncryption<br/>RunInstances - AuthorizeSecurityGroupIngress"]
+    CT["CloudTrail<br/>write management events"]
+    EB["EventBridge<br/>4 rules, pattern matched, no compute cost"]
+
+    API --> CT
+    CT --> EB
+    EB --> SELF
+
+    subgraph ENGINE["Lambda: compliance engine"]
+        SELF{"Caused by the<br/>engine's own role?"}
+        DENIED{"Did AWS reject<br/>the call?"}
+        REG["Dispatch registry<br/>keyed on source + eventName"]
+        RULES["s3_rules - ec2_rules - sg_rules"]
+        VERDICT{"unencrypted<br/>encrypted<br/>undetermined"}
+    end
+
+    SELF -->|yes| DROP["Dropped, actor logged<br/>feedback loop broken"]
+    SELF -->|no| DENIED
+    DENIED -->|yes| ATTEMPT["ViolationAttemptsBlocked<br/>notice, not a finding"]
+    DENIED -->|no| REG
+    REG --> RULES
+    RULES --> VERDICT
+
+    VERDICT -->|encrypted| OK["Compliant, no action"]
+    VERDICT -->|undetermined| UND["DetectionsUndetermined<br/>never auto-remediated"]
+    VERDICT -->|unencrypted| FIX["Remediate<br/>block public access, re-encrypt with KMS<br/>revoke ingress, stop and tag"]
+
+    FIX --> CW
+    UND --> CW
+    ATTEMPT --> CW
+    FIX --> SNS
+    UND --> SNS
+    ATTEMPT --> SNS
+
+    CW["CloudWatch<br/>metrics + structured JSON logs"]
+    SNS["SNS email alert"]
+    DLQ["SQS dead letter queue<br/>events that failed every retry"]
+
+    EB -.->|all retries exhausted| DLQ
+    FIX -.->|"a remediation is itself an API call"| CT
+
+    classDef guard fill:#fff4e5,stroke:#d9822b,stroke-width:2px
+    classDef sink fill:#eef6ff,stroke:#3b82c4
+    class SELF,DENIED guard
+    class CW,SNS,DLQ sink
 ```
-API call → CloudTrail → EventBridge → Lambda → Remediation
-                                         │
-                          ┌──────────────┼──────────────┐
-                          ▼              ▼              ▼
-                   CloudWatch        SNS Alert      SQS DLQ
-                   Metrics/Logs      (email)        (failures)
-```
+
+The dotted line back to CloudTrail is the part that matters. Every remediation
+is itself an API call, so it is logged and fed straight back in. The
+self-invocation guard is what stops that becoming an unbounded loop, and it is
+confirmed against a real CloudTrail record in
+[entry 7 of the engineering log](docs/engineering-log.md).
 
 Full diagrams are in [docs/architecture.md](docs/architecture.md).
 
