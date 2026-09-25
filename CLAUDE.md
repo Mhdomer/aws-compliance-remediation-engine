@@ -12,7 +12,7 @@ compliance violation, auto-remediates it, publishes a CloudWatch metric, and
 sends an SNS alert.
 
 It is a portfolio project aimed at Cloud Security / DevSecOps interviews. It has
-been deployed to real AWS three times and torn down each time. **The terraform state
+been deployed to real AWS four times and torn down each time. **The terraform state
 is empty.** Per the vault's root `CLAUDE.md`, this is the most fully built of the
 "Projects Idea" set, and one of only two that survive an interviewer asking
 "what actually broke and how did you fix it."
@@ -72,7 +72,7 @@ registry entry in `handler.py` + a module + an EventBridge rule + a matching
 
 ```bash
 python -m pytest -q --cov=src/lambda --cov=scripts   # coverage report
-python -m pytest -q                                  # 348 tests
+python -m pytest -q                                  # 352 tests
 cd infrastructure && terraform test                  # 26 tests, no credentials
 cd infrastructure && terraform validate
 cd infrastructure && terraform fmt -check -recursive
@@ -160,7 +160,27 @@ These look like inconsistencies. They are deliberate and each has a test.
 
 ## Active work
 
-### Agentic AI / MCP extension — ALL FOUR PHASES DONE
+### Agentic AI / MCP extension — built, and now exercised against real AWS
+
+**All six tools ran against a live account on 2026-09-25**, which had never
+happened before. `get_compliance_posture`, `list_exemptions`,
+`get_resource_state` and `describe_engine_rules` worked. The two log-backed
+tools did not, and two real bugs came out of it — see entries 17 and 18 of
+`docs/engineering-log.md`:
+
+- `COMPLIANCE_LOG_GROUP` defaulted to `compliance-engine-prod` while this repo's
+  tfvars deploys `test`, so `search_compliance_logs` and `get_resource_history`
+  looked for a log group this project never creates. `.mcp.json` now sets it.
+- `posture.py` and `engine_rules.py` each held a stale hardcoded metric list.
+  Three of the engine's eight metrics were invisible to the agent layer,
+  including `ExemptionsRejected`. `tests/unit/test_mcp_metric_agreement.py` now
+  fails if either list drifts from `cloudwatch_utils.py`, in either direction.
+
+**Do not describe the agent layer as autonomous.** It is a read-only query
+surface driven by a human in Claude Code. That claim is true and testable; the
+resume's "triggers scoped remediation" is not.
+
+### Original phase notes
 
 **The build plan is `docs/mcp-build-plan.md`** (local, gitignored). Read it
 before doing anything here. Decisions already made: read-only MCP server over
@@ -202,7 +222,7 @@ issue 1 which is commit `45597c1`. Commit messages and per-issue paths are in
 `docs/pending-commits.md`.
 
 ## docs/engineering-log.md
-A first-person write-up of sixteen bugs found across the review pass and live AWS
+A first-person write-up of eighteen bugs found across the review pass and live AWS
 deployment sessions: what was assumed, what was actually happening, how it was found,
 what changed. Tracked (not gitignored) because it is the "built and defended"
 evidence the vault CLAUDE.md says these projects lack. If he asks for interview prep

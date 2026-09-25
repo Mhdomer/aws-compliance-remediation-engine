@@ -783,6 +783,109 @@ only thing that was going to tell me. Every fixture I had was a successful
 
 ---
 
+## 17. The agent layer shipped pointing at a log group I never deploy
+
+**What I assumed.** The MCP server was finished. Six tools, tests passing, an
+IAM policy, a README section. The only thing left was to run it.
+
+**What was actually happening.** Two of its six tools could never have worked
+from a clean checkout. `mcp_server/config.py` defaults `COMPLIANCE_LOG_GROUP` to
+`/aws/lambda/compliance-engine-prod`, and `terraform.tfvars` in this repo
+deploys `environment = "test"`, which produces `compliance-engine-test`. The
+repo's own `.mcp.json` sets `COMPLIANCE_REGION` and nothing else, so the two
+log-backed tools looked for a log group this project does not create.
+
+**How I found out.** Running them against a live account for the first time on
+2026-09-25. `get_resource_history` came back:
+
+```
+"status": "LogGroupNotFound",
+"records": [],
+"warning": "Log group /aws/lambda/compliance-engine-prod does not exist in
+            us-east-1. The engine is most likely not deployed to this region,
+            or not deployed at all. This is not evidence that the account is
+            compliant."
+```
+
+**The part I got right by accident.** It told me. An empty `records` list with a
+`status: Complete` would have read as "this resource has a clean history", and I
+would have believed it. The warning is there because of the lesson from entry 3,
+and this is the first time it has earned its place against something real
+rather than a test.
+
+Pointing the tools at the log group that exists, both work: a real Logs Insights
+query, four records, the structured fields parsed out. Which is worth noting for
+a second reason. Before the logging fix in entry 14 those records were
+unstructured strings, so `search_compliance_logs` would have returned rows with
+no `violation`, no `actor` and no resource id. The tool was built on a premise
+that was not true yet.
+
+**What I changed.** `.mcp.json` now sets `COMPLIANCE_LOG_GROUP` to match the
+environment this repo actually deploys.
+
+**What I took from it.** `COMPLIANCE_REGION` is required and fails loudly when
+unset. `COMPLIANCE_LOG_GROUP` guesses, and guessed wrong, and the guess was
+`prod` in a repo whose only tfvars says `test`. I treated one piece of
+environment config as dangerous and the other as convenience, and there was no
+reason for the difference. A default that is wrong for the repo's own default
+deployment is not a default, it is a bug with a fallback value.
+
+---
+
+## 18. Every metric I added after building the agent layer was invisible to it
+
+**What I assumed.** `get_compliance_posture` reports the engine's posture, and
+`describe_engine_rules` tells an agent what signals exist. Both had tests. Both
+passed.
+
+**What was actually happening.** Both hold their own hardcoded copy of the
+metric list, written when the MCP server was built and never updated since:
+
+```
+engine publishes            MCP knows about
+--------------------------  ---------------
+ViolationsDetected          yes
+RemediationsApplied         yes
+RemediationsFailed          yes
+DetectionsUndetermined      yes
+ExemptionsApplied           yes
+ExemptionsRejected          NO
+RemediationsThrottled       NO
+ViolationAttemptsBlocked    NO
+```
+
+Three of eight. Every metric added after the agent layer was written had gone
+missing the same way: exemption expiry, the throttle/failure split, and the
+blocked-attempt counter from entry 13.
+
+**How I found out.** I ran the expired-exemption test on a live account, watched
+the engine publish `ExemptionsRejected` with `Reason=expired`, then asked
+`get_compliance_posture` what had happened in the last hour. It reported the
+violation and the remediation and said nothing about the rejected exemption.
+
+Which is the worst of the three to lose. An exemption someone left in place past
+its expiry is exactly the kind of quiet thing an agent is supposed to surface,
+and the tool built to surface it did not know the metric existed.
+
+**What I changed.** Both lists now cover all eight, with the dimension mapping
+`ViolationAttemptsBlocked` needs, and `describe_engine_rules` explains why those
+three counters are deliberately separate from the violation counters.
+
+Then the part that matters more: a test that reads the metric names out of
+`cloudwatch_utils.py` and fails if either MCP module disagrees, in either
+direction. Missing one means it is never reported. Naming one the engine does
+not publish is worse, because it reads back as a flat zero, which looks like
+good news.
+
+**What I took from it.** This is the same bug as the EventBridge rule and the
+handler registry from entry 8, and I had already written a test for that exact
+shape. I just did not notice that adding a second consumer of the metric names
+created a second pair that has to agree. Every new component that duplicates a
+list creates a new coupling, and the test I wrote for the first pair does not
+protect the second one.
+
+---
+
 ## The things I would tell myself at the start
 
 **"Nothing found" and "I could not look" must never be the same value.** This is
@@ -801,6 +904,13 @@ they were the quietest paths in my code.
 
 **Check whether the remediation fixed the violation, not whether it ran.**
 Terminating an instance ran perfectly and fixed nothing.
+
+**A second consumer of a list is a second coupling, and the first test does
+not cover it.** I had already written a test tying the EventBridge rules to the
+handler's registry, because two places holding the same event names will drift.
+Then I built an agent layer that holds its own copy of the metric names, and did
+not notice I had created the same problem again. Three metrics were invisible to
+it for months. Look for the duplicate, not for the component.
 
 **Test the wiring, not just the component.** A formatter test that constructs the
 formatter by hand proves the class works; it does not prove any module uses it.
@@ -840,6 +950,17 @@ Honest list of what this project does not do yet.
   not terminate it, with `ec2:TerminateInstances` absent from the deployed role.
 - The engine watches `PutBucketAcl` but not the two calls that make a public ACL
   possible on a current account. See entry 16.
+- The exemption paths are no longer untested. On 2026-09-25 a bucket tagged
+  exempt until 2027 was skipped and counted as `ExemptionsApplied`, and one
+  tagged exempt until 2020 was rejected with `reason=expired`, then detected and
+  remediated. Both took about 3 seconds end to end.
+- All six MCP tools have now run against a real account rather than mocks.
+  `get_compliance_posture`, `list_exemptions` and `get_resource_state` worked
+  first time; `list_exemptions` correctly separated the live exemption from the
+  expired one. The two log-backed tools did not, for the reason in entry 17.
+  Logs Insights also lags: a query run seconds after an event returned one
+  record where a query a few minutes later returned four, so a narrow time
+  window can read as an empty result.
 - Exemptions now expire, but nothing reminds anyone before they do. A resource
   silently starts being checked again on the expiry date, and the owner finds
   out from a remediation rather than a warning.
