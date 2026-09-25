@@ -356,18 +356,90 @@ terraform destroy -var-file=../terraform.tfvars
 
 ## How to Test It Live
 
-Once deployed, trigger a violation and watch it self-heal:
+Everything below is real output captured from a live AWS account, not an
+illustration.
 
-```bash
-# Create a test bucket and make it public — the engine will lock it back down within seconds
-aws s3api create-bucket --bucket my-test-bucket-$RANDOM --region us-east-1
-aws s3api put-bucket-acl --bucket <bucket-name> --acl public-read
+### Open SSH to the world, and watch it close
 
-# Within seconds, check the bucket — public access will be blocked
-aws s3api get-public-access-block --bucket <bucket-name>
+```console
+$ aws ec2 authorize-security-group-ingress \
+      --group-id sg-0c4ce7306521eec22 --protocol tcp --port 22 --cidr 0.0.0.0/0
+{ "Return": true }
+
+#  20:23:33   port 22 is now open to the entire internet
+#             nothing was told to watch for this: no agent, no polling, no cron
+
+$ aws logs tail /aws/lambda/compliance-engine-test --follow
+
+20:23:38  INFO     Compliance event received       source=aws.ec2
+                                                   event_name=AuthorizeSecurityGroupIngress
+20:23:38  WARNING  Violation detected              violation=SG_OPEN_PORT_22
+                                                   sg_id=sg-0c4ce7306521eec22
+                                                   cidr=0.0.0.0/0
+                                                   actor=arn:aws:iam::...:user/nonlouy
+20:23:40  INFO     Remediation applied             action=Revoked 0.0.0.0/0 access to port 22
+20:23:41  INFO     Compliance evaluation complete  status=remediated
+
+$ aws ec2 describe-security-groups --group-ids sg-0c4ce7306521eec22 \
+      --query 'SecurityGroups[0].IpPermissions'
+[]
+
+#  20:23:41   closed. eight seconds start to finish, and nobody was paged.
 ```
 
-You'll receive an email alert and the violation will appear on the CloudWatch dashboard.
+### The part that is easy to get wrong
+
+A remediation is itself an API call. CloudTrail logs it and EventBridge feeds it
+straight back in, so the engine can trigger itself. Here is that happening, and
+being caught:
+
+```console
+20:51:47  INFO     Compliance event received       event_name=PutBucketEncryption
+20:51:48  WARNING  Violation detected              violation=S3_WEAK_ENCRYPTION
+                                                   sse_algorithm=AES256
+20:51:48  INFO     Remediation applied             action=Reapplied mandated KMS encryption
+
+#  the engine's own PutBucketEncryption call returns 6.5 seconds later
+
+20:51:54  INFO     Compliance event received       event_name=PutBucketEncryption
+20:51:54  WARNING  Dropping event caused by the engine itself
+                                                   actor=arn:aws:sts::...:assumed-role/
+                                                         compliance-engine-test-lambda-role/...
+```
+
+The loop stops after one pass. Without that guard it runs forever at machine
+speed, writing to S3 and emailing on every cycle. The guard compares
+`sessionContext.sessionIssuer.arn`, **not** the top-level `userIdentity.arn`,
+which is an STS assumed-role ARN that would never have matched. That distinction
+is the whole guard, and it is confirmed against a real record in
+[entry 7 of the engineering log](docs/engineering-log.md).
+
+### Trying the S3 rule
+
+The obvious test does not work on a current AWS account, which is worth knowing
+before you assume the engine is broken:
+
+```console
+$ aws s3api put-bucket-acl --bucket my-test-bucket --acl public-read
+
+An error occurred (AccessDenied) ... because public ACLs are prevented by the
+BlockPublicAcls setting in S3 Block Public Access.
+```
+
+Every bucket created since April 2023 has Block Public Access on and
+`ObjectOwnership: BucketOwnerEnforced`, which disables ACLs outright. To exercise
+the rule you have to take those off first:
+
+```bash
+aws s3api delete-public-access-block --bucket <bucket>
+aws s3api put-bucket-ownership-controls --bucket <bucket> \
+    --ownership-controls 'Rules=[{ObjectOwnership=ObjectWriter}]'
+aws s3api put-bucket-acl --bucket <bucket> --acl public-read
+```
+
+Those first two calls are a gap in this engine's coverage and are written up as
+[entry 16](docs/engineering-log.md). You will also get an email alert, and the
+violation appears on the CloudWatch dashboard.
 
 ---
 
