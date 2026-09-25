@@ -70,6 +70,9 @@ def describe_engine_rules() -> dict:
             'RemediationsFailed',
             'DetectionsUndetermined',
             'ExemptionsApplied',
+            'ExemptionsRejected',
+            'RemediationsThrottled',
+            'ViolationAttemptsBlocked',
         ],
         'note': (
             'Detection is event-driven through CloudTrail and EventBridge. A '
@@ -77,6 +80,13 @@ def describe_engine_rules() -> dict:
             'deployed region or no event reaches the engine at all, in which '
             'case an absence of violations means nothing. Resources tagged '
             'with the exemption tag are skipped, and every skip is recorded '
-            'as an ExemptionsApplied metric and an alert.'
+            'as an ExemptionsApplied metric and an alert. Three counters are '
+            'deliberately separate from the violation counters and mean '
+            'different things: an exemption past its expiry date is rejected '
+            'rather than honoured and counts as ExemptionsRejected with a '
+            'reason; a remediation AWS throttled counts as '
+            'RemediationsThrottled and is not a failure; an API call AWS '
+            'itself rejected counts as ViolationAttemptsBlocked and is not a '
+            'violation, because nothing changed.'
         ),
     }

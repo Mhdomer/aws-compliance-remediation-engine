@@ -14,6 +14,9 @@ ENGINE_METRICS = (
     'RemediationsFailed',
     'DetectionsUndetermined',
     'ExemptionsApplied',
+    'ExemptionsRejected',
+    'RemediationsThrottled',
+    'ViolationAttemptsBlocked',
 )
 
 # ViolationsDetected and the remediation counters are dimensioned by
@@ -24,6 +27,11 @@ _DIMENSION = {
     'RemediationsFailed': 'ViolationType',
     'DetectionsUndetermined': 'CheckType',
     'ExemptionsApplied': 'CheckType',
+    'ExemptionsRejected': 'CheckType',
+    'RemediationsThrottled': 'CheckType',
+    # The only one keyed on the API call rather than the check, because a
+    # rejected call never reached a rule and so has no violation type.
+    'ViolationAttemptsBlocked': 'EventName',
 }
 
 MIN_HOURS = 1
