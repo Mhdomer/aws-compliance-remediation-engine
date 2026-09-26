@@ -1,0 +1,131 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Compliance engine - terminal card</title>
+<style>
+  :root {
+    --bg:     #0b1220;
+    --chrome: #161f31;
+    --edge:   #243149;
+    --fg:     #d7dee9;
+    --dim:    #6b7a90;
+    --prompt: #5ec8f2;
+    --warn:   #f0a35e;
+    --ok:     #5fd07f;
+    --key:    #8fa6c4;
+    --accent: #e05c5c;
+  }
+  html, body {
+    margin: 0;
+    background: #1b2333;
+    display: grid;
+    place-items: center;
+    min-height: 100vh;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  /* Exactly the GitHub social-preview size. Screenshot this box. */
+  .card {
+    width: 1280px;
+    height: 640px;
+    background: var(--bg);
+    border: 1px solid var(--edge);
+    border-radius: 14px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 24px 70px rgba(0,0,0,.55);
+  }
+
+  .chrome {
+    flex: 0 0 44px;
+    background: var(--chrome);
+    border-bottom: 1px solid var(--edge);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 56px;
+  }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .r { background: #ec6a5e; } .y { background: #f4bf4f; } .g { background: #61c554; }
+  .chrome .title {
+    margin-left: 12px;
+    color: var(--dim);
+    font-size: 13px;
+    font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, monospace;
+  }
+
+  /* Flex centres ONE child. Putting flex directly on the text container turned
+     every inline span into its own flex item and stacked them vertically. */
+  .body {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    padding: 0 56px;
+    overflow: hidden;
+  }
+  .out {
+    margin: 0;
+    white-space: pre;
+    font-family: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 17px;
+    line-height: 1.72;
+    color: var(--fg);
+  }
+
+  .prompt { color: var(--prompt); }
+  .dim    { color: var(--dim); }
+  .warn   { color: var(--warn); }
+  .ok     { color: var(--ok); }
+  .k      { color: var(--key); }
+  .accent { color: var(--accent); }
+  .ts     { color: var(--dim); }
+
+  .footer {
+    flex: 0 0 92px;
+    border-top: 1px solid var(--edge);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 56px;
+    background: #0e1728;
+  }
+  .footer .left { font-size: 22px; color: #e9eef5; font-weight: 600; letter-spacing: -.2px; }
+  .footer .left small {
+    display: block; font-size: 13.5px; color: var(--dim);
+    font-weight: 400; margin-top: 4px; letter-spacing: 0;
+  }
+  .footer .right { font-size: 13.5px; color: var(--dim); text-align: right; line-height: 1.55; }
+  .footer .right b { color: #b9c6d8; font-weight: 600; }
+</style>
+
+<div class="card">
+  <div class="chrome">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="title">aws-compliance-remediation-engine &mdash; us-east-1</span>
+  </div>
+
+  <div class="body"><pre class="out"><span class="prompt">$</span> aws ec2 authorize-security-group-ingress --port 22 --cidr 0.0.0.0/0
+<span class="dim">{ "Return": true }</span>
+<span class="dim">#  20:23:33   port 22 is now open to the entire internet</span>
+
+<span class="prompt">$</span> aws logs tail /aws/lambda/compliance-engine --follow
+<span class="ts">20:23:38</span>  <span class="warn">WARNING</span>  Violation detected    <span class="k">violation=</span><span class="accent">SG_OPEN_PORT_22</span>
+                            <span class="k">cidr=</span>0.0.0.0/0
+                            <span class="k">actor=</span>arn:aws:iam::&hellip;:user/nonlouy
+<span class="ts">20:23:40</span>  <span class="ok">INFO</span>     Remediation applied  <span class="k">action=</span>Revoked 0.0.0.0/0 access to port 22
+
+<span class="prompt">$</span> aws ec2 describe-security-groups --query 'SecurityGroups[0].IpPermissions'
+<span class="ok">[]</span>
+<span class="dim">#  20:23:41   closed. eight seconds, and nobody was paged.</span></pre></div>
+
+  <div class="footer">
+    <div class="left">
+      Automated Cloud Compliance &amp; Remediation Engine
+      <small>serverless AWS &middot; detects and fixes misconfigurations in seconds</small>
+    </div>
+    <div class="right">
+      <b>real output</b>, captured from a live account<br>
+      378 automated tests &middot; 18 documented bugs
+    </div>
+  </div>
+</div>
