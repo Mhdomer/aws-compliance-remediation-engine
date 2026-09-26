@@ -1,6 +1,6 @@
 # Automated Cloud Compliance & Remediation Engine
 
-A real-time, serverless system that watches an AWS account for security policy violations and **automatically fixes them** in seconds — no human in the loop.
+A real-time, serverless system that watches an AWS account for security policy violations and **automatically fixes them** in seconds, with no human in the loop.
 
 When someone makes an S3 bucket public, launches an unencrypted EC2 instance, or opens SSH to the entire internet, this engine detects it the moment it happens and reverses it before it becomes an exposure.
 
@@ -40,8 +40,8 @@ Guard 1 is what stops that becoming an unbounded loop, and it is confirmed
 against a real CloudTrail record in
 [entry 7 of the engineering log](docs/engineering-log.md).
 
-Editable source: [docs/architecture.excalidraw](docs/architecture.excalidraw) —
-open it at excalidraw.com or in Obsidian. Re-export the PNG if you change it, or
+Editable source: [docs/architecture.excalidraw](docs/architecture.excalidraw).
+Open it at excalidraw.com or in Obsidian. Re-export the PNG if you change it, or
 the two drift.
 
 Full diagrams are in [docs/architecture.md](docs/architecture.md).
@@ -163,7 +163,7 @@ Restart Claude Code in this directory and it picks the server up.
 
 **`COMPLIANCE_REGION` is required and never inherited.** boto3 would otherwise
 fall back to your CLI's configured region, which is not necessarily where the
-engine is deployed, and every query would come back empty — reading as "no
+engine is deployed, and every query would come back empty, reading as "no
 violations" rather than "wrong region". Set it to `aws_region` from your tfvars.
 
 | Variable | Default | Purpose |
@@ -176,7 +176,7 @@ violations" rather than "wrong region". Set it to `aws_region` from your tfvars.
 
 > **you:** What does this compliance engine check for?
 >
-> *calls `describe_engine_rules` — no AWS needed, so this works before anything
+> *calls `describe_engine_rules`, which needs no AWS, so this works before anything
 > is deployed*
 >
 > **you:** Anything been exempted recently?
@@ -195,7 +195,7 @@ The MCP server above is driven by a human in a chat window. Two agents run the
 same tools in a loop with nobody watching, so the engine can be queried from a
 schedule or an event.
 
-**Free** — `mcp_server/free_agent.py`, via Groq's free tier or a fully local
+**Free.** `mcp_server/free_agent.py`, via Groq's free tier or a fully local
 Ollama:
 
 ```bash
@@ -205,7 +205,7 @@ export GROQ_API_KEY=...                  # omit to use local Ollama instead
 python -m mcp_server.free_agent "anything exempted this week?"
 ```
 
-**Paid** — `mcp_server/agent.py`, via the Anthropic API. The only thing in this
+**Paid.** `mcp_server/agent.py`, via the Anthropic API. The only thing in this
 project that costs money per run:
 
 ```bash
@@ -221,7 +221,7 @@ agent declared four of the six tools, which fails silently, because a model
 never calls a tool it was not told about.
 
 Both loops are capped at eight turns. Neither spends anything at import time or
-under test — the APIs are mocked throughout, and both SDKs are imported lazily,
+under test. The APIs are mocked throughout, and both SDKs are imported lazily,
 so the modules and their tests work without either installed.
 
 ### Tests
@@ -250,7 +250,7 @@ constructs a real boto3 client, so the suite cannot quietly reach AWS.
 
 EventBridge only delivers `AWS API Call via CloudTrail` events when a trail is
 enabled and logging. CloudTrail **Event history**, which is always on, is not
-enough — it is a 90-day console view, not a trail.
+enough: it is a 90-day console view, not a trail.
 
 Without a trail, `terraform apply` succeeds, every resource reports healthy, the
 dashboard renders, and no event ever arrives. Nothing errors anywhere. This is
@@ -278,7 +278,7 @@ duplicates both the audit path and the bill.
 The trail this project creates is `WriteOnly` management events, no data events,
 because all four rules match write management events. If you add a rule for a
 read-only event, widen the trail to `All` **and** set that EventBridge rule's
-state to `ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS` — default-enabled rules
+state to `ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS`, because default-enabled rules
 only match write management events.
 
 ### 1. Run the tests
@@ -302,7 +302,7 @@ Read-only, costs nothing. Do this before deploying and again afterwards.
 
 **Pass the region the engine is deployed in**, or set `COMPLIANCE_REGION`.
 CloudTrail and EventBridge are regional, and without it the check falls back to
-your AWS CLI default — which may be somewhere the engine was never deployed.
+your AWS CLI default, which may be somewhere the engine was never deployed.
 A pass against the wrong region is worse than a failure.
 
 ### 4. Deploy
@@ -413,10 +413,10 @@ violation appears on the CloudWatch dashboard.
 
 ## Safety Features
 
-- **Exemptions** — Tag any resource `ComplianceExempt = true` to opt it out of remediation (for legitimate cases like static-website buckets).
-- **Least-privilege IAM** — The Lambda can only perform the exact API calls its rules require, nothing more.
-- **Dead Letter Queue** — If a remediation fails after 3 attempts, the event is captured for manual review and a human is alerted.
-- **Full audit trail** — Every detection and remediation is logged as structured JSON, queryable in CloudWatch Logs Insights.
+- **Exemptions.** Tag any resource `ComplianceExempt = true` to opt it out of remediation (for legitimate cases like static-website buckets).
+- **Least-privilege IAM.** The Lambda can only perform the exact API calls its rules require, nothing more.
+- **Dead Letter Queue.** If a remediation fails after 3 attempts, the event is captured for manual review and a human is alerted.
+- **Full audit trail.** Every detection and remediation is logged as structured JSON, queryable in CloudWatch Logs Insights.
 
 ---
 
