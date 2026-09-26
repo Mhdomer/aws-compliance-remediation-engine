@@ -933,34 +933,88 @@ something I could get wrong.
 
 ---
 
-## What I would still change
+## What this has been proved to do
 
-Honest list of what this project does not do yet.
+Measured on a live AWS account, not estimated.
 
-- `handle_run_instances` processes every instance in an event serially inside
-  one invocation. A large `RunInstances` will time out and replay. See entry 10.
-- Exemptions have no expiry. A resource tagged exempt stays exempt forever, and
-  the right design is probably a date the tag stops being honoured.
-- I have still never load-tested this under sustained traffic, but the
-  deployment gap is closed: on 2026-09-19 it ran on a real account and every rule
-  was driven end to end. Measured CloudTrail-to-Lambda delivery latency was 3.5s
-  to 6s for EC2 and security groups and 8s to 9.5s for S3. A cold invocation took
-  2530ms and used 109MB of the 256MB allocated, so the memory setting has more
-  headroom than it needs. EC2 remediation stopped and tagged the instance and did
-  not terminate it, with `ec2:TerminateInstances` absent from the deployed role.
-- The engine watches `PutBucketAcl` but not the two calls that make a public ACL
-  possible on a current account. See entry 16.
-- The exemption paths are no longer untested. On 2026-09-25 a bucket tagged
-  exempt until 2027 was skipped and counted as `ExemptionsApplied`, and one
-  tagged exempt until 2020 was rejected with `reason=expired`, then detected and
-  remediated. Both took about 3 seconds end to end.
-- All six MCP tools have now run against a real account rather than mocks.
-  `get_compliance_posture`, `list_exemptions` and `get_resource_state` worked
-  first time; `list_exemptions` correctly separated the live exemption from the
-  expired one. The two log-backed tools did not, for the reason in entry 17.
-  Logs Insights also lags: a query run seconds after an event returned one
-  record where a query a few minutes later returned four, so a narrow time
-  window can read as an empty result.
-- Exemptions now expire, but nothing reminds anyone before they do. A resource
-  silently starts being checked again on the expiry date, and the owner finds
-  out from a remediation rather than a warning.
+- **Deployed and driven end to end** on 2026-09-19 and 2026-09-25. Every rule,
+  both exemption paths, and all six MCP tools.
+- **CloudTrail to Lambda latency:** 3.5s to 6s for EC2 and security groups, 8s
+  to 9.5s for S3. A cold invocation took 2530ms and used 109MB of 256MB.
+- **The self-invocation guard fires** against a real CloudTrail record.
+  `sessionIssuer.arn` matches the role; `userIdentity.arn` never would have.
+  See entry 7.
+- **The EC2 pending-instance race is real.** `RunInstances` returns with
+  `BlockDeviceMappings` empty. The fresh `describe_instances` is what avoids it.
+  See entry 3.
+- **EC2 remediation stops and tags rather than terminating**, with
+  `ec2:TerminateInstances` absent from the deployed role.
+- **Exemptions work both ways.** Exempt until 2027 was skipped and counted.
+  Exempt until 2020 was rejected with `reason=expired`, then remediated.
+
+One caveat worth remembering: **CloudWatch Logs Insights lags.** The same query
+returned one record seconds after an event and four a few minutes later. A
+narrow time window reads as an empty result.
+
+---
+
+## Open work
+
+What this does not do yet, roughly in the order I would pick it up.
+
+**1. Decide what the engine should do about Block Public Access being turned
+off.** The S3 rule watches `PutBucketAcl`, but on a current account that call
+cannot succeed until someone has already run
+`DeleteBucketPublicAccessBlock` and `PutBucketOwnershipControls`. Neither is
+registered, so the engine only sees the last step of a sequence it should have
+caught at the first. This needs a decision before it needs code: disabling BPA
+is not automatically a violation the way a public ACL is, and some buckets
+legitimately need ACLs back on. A notice carrying the actor is probably right,
+not a remediation. See entry 16.
+
+**2. `handle_run_instances` processes instances serially.** Every instance in
+one `RunInstances` event is handled inside a single invocation, at a measured 6
+API calls each. Fifty instances is 300 calls in a 60-second function. It will
+time out and replay. See entry 10.
+
+**3. Nothing warns before an exemption expires.** A resource silently starts
+being checked again on its expiry date and the owner finds out from a
+remediation. A scheduled check reading `list_exemptions` and alerting on
+anything expiring within a week would close it, and the MCP tool to read them
+already exists.
+
+**4. Never load-tested under sustained traffic.** `scripts/load_test.py`
+estimates a 50-violation run at about $0.013 and refuses to run without two
+separate flags. The generator itself is deliberately unwritten: a script that
+creates public buckets and open security groups is one bad flag away from being
+an incident. What the test would actually answer is whether reserved concurrency
+holds the engine under the EC2 token bucket refill rate. See entry 11.
+
+**5. `COMPLIANCE_LOG_GROUP` still defaults to `compliance-engine-prod`.**
+`.mcp.json` now sets it correctly, so the tools work, but the default in
+`mcp_server/config.py` is still wrong for this repo's own tfvars.
+`COMPLIANCE_REGION` is required and fails loudly when unset; this one guesses.
+There is no good reason for the difference. See entry 17.
+
+**6. The Lambda is over-provisioned.** 109MB used of 256MB allocated on a cold
+start. 128MB would likely do, and Lambda bills on memory.
+
+### Further out
+
+- More rules. The registry plus one module plus an EventBridge rule plus a
+  matching `aws_lambda_permission` is the whole cost of adding one. IAM policy
+  changes and publicly accessible RDS instances are the obvious next two.
+- Multi-region. Everything here is single-region because CloudTrail and
+  EventBridge are regional. A multi-region trail already exists when
+  `create_cloudtrail = true`, so the gap is the EventBridge rules and the Lambda.
+- Multi-account, through an Organizations trail.
+- A scheduled posture report. `mcp_server/free_agent.py` already runs the tools
+  unattended for free, so a weekly summary is a cron away.
+
+### Not repo work, but tracked
+
+- The resume still claims the agent layer can **"trigger scoped remediation."**
+  It cannot: the MCP server is read-only, enforced in three layers. Replacement
+  wording is in `docs/linkedin-project-entry.md`.
+- The resume cites **"a 31-test automated unit test suite."** It is 352 Python
+  tests and 26 Terraform tests.

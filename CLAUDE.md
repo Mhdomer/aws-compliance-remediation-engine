@@ -228,7 +228,20 @@ what changed. Tracked (not gitignored) because it is the "built and defended"
 evidence the vault CLAUDE.md says these projects lack. If he asks for interview prep
 material, start there rather than re-deriving it.
 
-## Known gap — S3 rule coverage
+## Where to pick this up
+
+`docs/engineering-log.md` ends with two sections that are the handoff:
+
+- **"What this has been proved to do"**: measured on a live account, not
+  estimated. Latency, memory, which guards actually fired.
+- **"Open work"**: six items in the order I would take them, each with why it
+  matters and what the first step is, plus further-out ideas and the two stale
+  claims on the resume.
+
+Read those before starting anything here. The first item needs a design decision
+rather than code, so do not treat it as a ticket.
+
+## Known gap: S3 rule coverage
 
 The engine watches `PutBucketAcl`, but a bucket created on a current account
 cannot accept a public ACL: since April 2023 every new bucket has Block Public
