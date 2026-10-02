@@ -95,6 +95,8 @@ resource "aws_lambda_permission" "eventbridge" {
     ec2-run-instances  = aws_cloudwatch_event_rule.ec2_run_instances.arn
     sg-ingress         = aws_cloudwatch_event_rule.sg_ingress.arn
     exemption-expiry   = aws_cloudwatch_event_rule.exemption_expiry.arn
+    s3-pab-removed     = aws_cloudwatch_event_rule.s3_public_access_block_removed.arn
+    s3-ownership       = aws_cloudwatch_event_rule.s3_ownership_controls.arn
   }
 
   statement_id  = "AllowExecutionFrom-${each.key}"

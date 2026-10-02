@@ -30,6 +30,23 @@ _DESCRIPTIONS = {
         'to the unencrypted volume while leaving the volume intact to be fixed. '
         'Terminating is opt-in and the IAM permission does not exist by default.',
     ),
+    'DeleteBucketPublicAccessBlock': (
+        'S3_PUBLIC_ACCESS_BLOCK_REMOVED',
+        'Block Public Access being removed from a bucket. Not a violation on '
+        'its own, but since April 2023 it is the first of the two calls that '
+        'have to happen before a public ACL can be accepted at all.',
+        'Reports it with the principal who did it. Nothing is changed back: '
+        'the engine cannot tell a deliberate change from a mistake, and some '
+        'buckets legitimately need public reads.',
+    ),
+    'PutBucketOwnershipControls': (
+        'S3_ACLS_REENABLED',
+        'Object ownership moving off BucketOwnerEnforced, which turns bucket '
+        'ACLs back on. The second of the two calls that precede a public ACL. '
+        'Setting BucketOwnerEnforced is the safe direction and is not reported.',
+        'Reports it with the principal who did it. Nothing is changed back, '
+        'for the same reason.',
+    ),
     'AuthorizeSecurityGroupIngress': (
         'SG_OPEN_PORT_<port>',
         'An ingress rule opening port 22 or 3389 to 0.0.0.0/0 or ::/0, '
@@ -74,6 +91,7 @@ def describe_engine_rules() -> dict:
             'RemediationsThrottled',
             'ViolationAttemptsBlocked',
             'ExemptionsExpiringSoon',
+            'ProtectionsWeakened',
         ],
         'note': (
             'Detection is event-driven through CloudTrail and EventBridge. A '

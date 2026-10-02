@@ -13,6 +13,9 @@ logger = setup_logger(__name__)
 _RULE_REGISTRY = {
     ('aws.s3',  'PutBucketAcl'):                s3_rules.evaluate,
     ('aws.s3',  'PutBucketEncryption'):         s3_rules.evaluate,
+    # The two calls that have to happen before a public ACL can stick.
+    ('aws.s3',  'DeleteBucketPublicAccessBlock'): s3_rules.evaluate,
+    ('aws.s3',  'PutBucketOwnershipControls'):  s3_rules.evaluate,
     ('aws.ec2', 'RunInstances'):                ec2_rules.evaluate,
     ('aws.ec2', 'AuthorizeSecurityGroupIngress'): sg_rules.evaluate,
 }

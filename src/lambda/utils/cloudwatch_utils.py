@@ -136,6 +136,34 @@ def publish_throttled(check_type: str, resource_id: str) -> None:
         })
 
 
+def publish_protection_weakened(check_type: str, resource_id: str) -> None:
+    """Record a control being taken off, which is not the same as a violation.
+
+    Deliberately not ViolationsDetected. Removing Block Public Access does not
+    make a bucket public, and some buckets legitimately need ACLs on. What it
+    does is remove the thing that was stopping the next call from working, and
+    a run of these is what the approach to a public bucket looks like.
+    """
+    now = datetime.now(timezone.utc)
+
+    metric = {
+        'MetricName': 'ProtectionsWeakened',
+        'Dimensions': [{'Name': 'CheckType', 'Value': check_type}],
+        'Value': 1,
+        'Unit': 'Count',
+        'Timestamp': now,
+    }
+
+    try:
+        _get_client().put_metric_data(Namespace=NAMESPACE, MetricData=[metric])
+    except Exception as exc:
+        logger.error('Failed to publish CloudWatch metrics', extra={
+            'check_type': check_type,
+            'resource_id': resource_id,
+            'error': str(exc),
+        })
+
+
 def publish_exemption_expiring(resource_id: str) -> None:
     """Record an exemption that lapses soon.
 

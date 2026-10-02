@@ -1,11 +1,12 @@
 class TestDescribeEngineRules:
-    def test_reports_all_four_checks(self):
+    def test_reports_every_check(self):
         from mcp_server.tools.engine_rules import describe_engine_rules
         result = describe_engine_rules()
 
         events = {c['event_name'] for c in result['checks']}
         assert events == {
             'PutBucketAcl', 'PutBucketEncryption',
+            'DeleteBucketPublicAccessBlock', 'PutBucketOwnershipControls',
             'RunInstances', 'AuthorizeSecurityGroupIngress',
         }
 

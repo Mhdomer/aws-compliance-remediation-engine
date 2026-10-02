@@ -1,0 +1,42 @@
+{
+  "version": "0",
+  "id": "a12b3c4d-5678-90ab-cdef-EXAMPLE66666",
+  "source": "aws.s3",
+  "account": "123456789012",
+  "time": "2026-10-02T09:15:30Z",
+  "region": "us-east-1",
+  "detail-type": "AWS API Call via CloudTrail",
+  "detail": {
+    "eventVersion": "1.11",
+    "userIdentity": {
+      "type": "IAMUser",
+      "principalId": "AIDACKCEVSQ6C2EXAMPLE",
+      "arn": "arn:aws:iam::123456789012:user/developer",
+      "accountId": "123456789012",
+      "accessKeyId": "AKIAIOSFODNN7EXAMPLE",
+      "userName": "developer"
+    },
+    "eventTime": "2026-10-02T09:15:30Z",
+    "eventSource": "s3.amazonaws.com",
+    "eventName": "PutBucketOwnershipControls",
+    "awsRegion": "us-east-1",
+    "sourceIPAddress": "203.0.113.0",
+    "userAgent": "aws-cli/2.0.0",
+    "requestParameters": {
+      "bucketName": "my-sensitive-data-bucket",
+      "Host": "my-sensitive-data-bucket.s3.us-east-1.amazonaws.com",
+      "ownershipControls": "",
+      "OwnershipControls": {
+        "Rule": [
+          {
+            "ObjectOwnership": "ObjectWriter"
+          }
+        ]
+      }
+    },
+    "responseElements": null,
+    "readOnly": false,
+    "eventType": "AwsApiCall",
+    "_comment": "Constructed, not captured. The live account used to verify this project was torn down before these two rules existed, so there was no way to record a real one. The shape follows the AWS CloudTrail reference for the call and the three fixtures in this directory that were captured live. Replace it with a captured event on the next deployment."
+  }
+}

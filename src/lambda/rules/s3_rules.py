@@ -12,6 +12,7 @@ from utils.exemption import (
     evaluate_exemption,
 )
 from utils.cloudwatch_utils import (
+    publish_protection_weakened,
     publish_exemption,
     publish_exemption_rejected,
     publish_throttled,
@@ -20,7 +21,10 @@ from utils.cloudwatch_utils import (
 from utils.logger import setup_logger
 from utils.notifier import (
     NOTICE_EXEMPTION,
+    NOTICE_PROTECTION_WEAKENED,
+    NOTICE_UNDETERMINED,
     STATUS_EXEMPTION,
+    STATUS_REVIEW,
     send_alert,
     send_notice,
 )
@@ -291,9 +295,123 @@ def handle_put_bucket_encryption(detail: dict) -> dict:
     }
 
 
+
+# ─── The calls that make a public bucket possible ────────────────────────────
+# PutBucketAcl is the last step of three, and on any account created since
+# April 2023 it is the only one that cannot happen on its own: new buckets
+# carry Block Public Access and ObjectOwnership BucketOwnerEnforced, so a
+# public ACL is refused until both are taken off. Watching only the third
+# meant the engine saw the finish and never the approach.
+#
+# Reported, not remediated. Putting the block back would fight a change the
+# engine cannot tell was deliberate, and some buckets legitimately need ACLs.
+# Naming the principal straight away is the part somebody can act on.
+
+ACLS_DISABLED = 'BucketOwnerEnforced'
+
+CHECK_BLOCK_REMOVED = 'S3_PUBLIC_ACCESS_BLOCK_REMOVED'
+CHECK_ACLS_REENABLED = 'S3_ACLS_REENABLED'
+
+
+def _report_weakened(check_type: str, bucket_name: str, actor: str,
+                     what: str) -> dict:
+    logger.warning('Protection weakened', extra={
+        'check': check_type,
+        'bucket': bucket_name,
+        'actor': actor,
+    })
+    publish_protection_weakened(check_type, bucket_name)
+    send_notice(
+        NOTICE_PROTECTION_WEAKENED,
+        bucket_name,
+        actor,
+        f'{what} on {bucket_name}. Nothing has been changed back: this may be '
+        'deliberate, and the engine cannot tell. It is reported because it is '
+        'what has to happen before a bucket can be made public, and because '
+        'the principal who did it is worth knowing now rather than later.',
+        STATUS_REVIEW,
+    )
+    return {
+        'status': 'reported',
+        'check': check_type,
+        'bucket': bucket_name,
+        'actor': actor,
+    }
+
+
+def handle_public_access_block_removed(detail: dict) -> dict:
+    bucket_name = detail.get('requestParameters', {}).get('bucketName', '')
+    actor = detail.get('userIdentity', {}).get('arn', 'unknown')
+
+    if not bucket_name:
+        logger.error('DeleteBucketPublicAccessBlock event missing bucketName')
+        return {'status': 'error', 'reason': 'missing_bucket_name'}
+
+    return _report_weakened(
+        CHECK_BLOCK_REMOVED,
+        bucket_name,
+        actor,
+        'Block Public Access was removed',
+    )
+
+
+def handle_ownership_controls_changed(detail: dict) -> dict:
+    """Report ownership moving off BucketOwnerEnforced, which re-enables ACLs.
+
+    Only one direction matters. Setting BucketOwnerEnforced turns ACLs off, and
+    emailing somebody every time a bucket got safer is how a mailbox stops
+    being read.
+    """
+    params = detail.get('requestParameters', {})
+    bucket_name = params.get('bucketName', '')
+    actor = detail.get('userIdentity', {}).get('arn', 'unknown')
+
+    if not bucket_name:
+        logger.error('PutBucketOwnershipControls event missing bucketName')
+        return {'status': 'error', 'reason': 'missing_bucket_name'}
+
+    rules = params.get('OwnershipControls', {}).get('Rule', [])
+    settings = [
+        rule.get('ObjectOwnership')
+        for rule in rules
+        if isinstance(rule, dict) and rule.get('ObjectOwnership')
+    ]
+
+    if not settings:
+        # The event did not say which way it went. Undetermined rather than
+        # compliant: a check that could not read the data has not passed.
+        logger.warning('Ownership controls could not be read', extra={
+            'check': CHECK_ACLS_REENABLED,
+            'bucket': bucket_name,
+            'actor': actor,
+        })
+        send_notice(
+            NOTICE_UNDETERMINED,
+            bucket_name,
+            actor,
+            'PutBucketOwnershipControls carried no readable ObjectOwnership '
+            'setting, so whether ACLs were re-enabled on '
+            f'{bucket_name} could not be determined.',
+            STATUS_REVIEW,
+        )
+        return {'status': 'undetermined', 'bucket': bucket_name}
+
+    if all(setting == ACLS_DISABLED for setting in settings):
+        return {'status': 'compliant', 'bucket': bucket_name}
+
+    return _report_weakened(
+        CHECK_ACLS_REENABLED,
+        bucket_name,
+        actor,
+        f'Object ownership was set to {", ".join(settings)}, which re-enables ACLs',
+    )
+
+
 _HANDLERS = {
     'PutBucketAcl': handle_put_bucket_acl,
     'PutBucketEncryption': handle_put_bucket_encryption,
+    'DeleteBucketPublicAccessBlock': handle_public_access_block_removed,
+    'PutBucketOwnershipControls': handle_ownership_controls_changed,
 }
 
 

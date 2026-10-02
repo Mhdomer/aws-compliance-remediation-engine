@@ -61,6 +61,16 @@ override_resource {
   values = { arn = "arn:aws:events:us-east-1:123456789012:rule/mock-exemption-expiry" }
 }
 
+override_resource {
+  target = aws_cloudwatch_event_rule.s3_public_access_block_removed
+  values = { arn = "arn:aws:events:us-east-1:123456789012:rule/mock-s3-pab-removed" }
+}
+
+override_resource {
+  target = aws_cloudwatch_event_rule.s3_ownership_controls
+  values = { arn = "arn:aws:events:us-east-1:123456789012:rule/mock-s3-ownership" }
+}
+
 variables {
   alert_email = "security@example.com"
 }
@@ -94,6 +104,8 @@ run "permissions_cover_exactly_the_rules" {
       aws_cloudwatch_event_rule.ec2_run_instances.arn,
       aws_cloudwatch_event_rule.sg_ingress.arn,
       aws_cloudwatch_event_rule.exemption_expiry.arn,
+      aws_cloudwatch_event_rule.s3_public_access_block_removed.arn,
+      aws_cloudwatch_event_rule.s3_ownership_controls.arn,
     ])
     error_message = "invoke permissions must match the four EventBridge rule ARNs exactly"
   }

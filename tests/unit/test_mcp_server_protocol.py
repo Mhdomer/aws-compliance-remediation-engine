@@ -49,6 +49,7 @@ class TestToolsAreCallable:
         payload = json.loads(result.content[0].text)
         assert {c['event_name'] for c in payload['checks']} == {
             'PutBucketAcl', 'PutBucketEncryption',
+            'DeleteBucketPublicAccessBlock', 'PutBucketOwnershipControls',
             'RunInstances', 'AuthorizeSecurityGroupIngress',
         }
 
