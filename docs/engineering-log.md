@@ -886,6 +886,47 @@ protect the second one.
 
 ---
 
+## 19. My fixtures could not describe more than one instance
+
+**What I assumed.** The EC2 tests covered `handle_run_instances`. There were
+plenty of them and they passed.
+
+**What was actually happening.** Every fixture built a `describe_instances`
+response like this:
+
+```
+{'Reservations': [{'Instances': [{'State': ..., 'Tags': ..., 'BlockDeviceMappings': ...}]}]}
+```
+
+No `InstanceId`. Real EC2 always sends one. The fixture could get away with it
+because the code read the response positionally, `['Reservations'][0]
+['Instances'][0]`, having asked about exactly one instance. The volume
+fixtures had the same hole: no `VolumeId`, because the code matched volumes to
+block device mappings by counting them rather than by name.
+
+So the fixtures could only ever describe a single instance. A response about
+several was not something they could express, which means the path that
+handles several instances had never been tested with more than one.
+
+**How I found out.** Batching the describes. One `describe_instances` for every
+instance in the event needs the response keyed by id, and 27 tests went red at
+once because nothing in them carried an id to key on.
+
+**What I changed.** The fixtures carry `InstanceId` and `VolumeId`, because
+real responses do. The prefetch also falls back to the old per-instance path if
+a response comes back with no ids on it at all: a response that cannot be
+indexed cannot be used, and guessing by position is what caused this.
+
+**What I took from it.** The fixture was shaped by what the code happened to
+read, not by what AWS actually sends. That is backwards, and it quietly set a
+ceiling on what the tests could check: not one of them could have caught a bug
+that only appears with two instances, because not one of them could describe
+two instances. Entry 8 was about tests that stop one layer short of the thing
+that breaks. This is a layer below that, where the fixture itself cannot
+represent the situation the bug needs.
+
+---
+
 ## The things I would tell myself at the start
 
 **"Nothing found" and "I could not look" must never be the same value.** This is
@@ -960,44 +1001,38 @@ narrow time window reads as an empty result.
 
 ## Open work
 
-What this does not do yet, roughly in the order I would pick it up.
+Four of the six items here were done on 2026-10-02. What is left, and why.
 
-**1. Decide what the engine should do about Block Public Access being turned
-off.** The S3 rule watches `PutBucketAcl`, but on a current account that call
-cannot succeed until someone has already run
-`DeleteBucketPublicAccessBlock` and `PutBucketOwnershipControls`. Neither is
-registered, so the engine only sees the last step of a sequence it should have
-caught at the first. This needs a decision before it needs code: disabling BPA
-is not automatically a violation the way a public ACL is, and some buckets
-legitimately need ACLs back on. A notice carrying the actor is probably right,
-not a remediation. See entry 16.
-
-**2. `handle_run_instances` processes instances serially.** Every instance in
-one `RunInstances` event is handled inside a single invocation, at a measured 6
-API calls each. Fifty instances is 300 calls in a 60-second function. It will
-time out and replay. See entry 10.
-
-**3. Nothing warns before an exemption expires.** A resource silently starts
-being checked again on its expiry date and the owner finds out from a
-remediation. A scheduled check reading `list_exemptions` and alerting on
-anything expiring within a week would close it, and the MCP tool to read them
-already exists.
-
-**4. Never load-tested under sustained traffic.** `scripts/load_test.py`
+**1. Never load-tested under sustained traffic.** `scripts/load_test.py`
 estimates a 50-violation run at about $0.013 and refuses to run without two
 separate flags. The generator itself is deliberately unwritten: a script that
 creates public buckets and open security groups is one bad flag away from being
-an incident. What the test would actually answer is whether reserved concurrency
-holds the engine under the EC2 token bucket refill rate. See entry 11.
+an incident. What the test would actually answer is whether reserved
+concurrency holds the engine under the EC2 token bucket refill rate. See
+entry 11. This is the one item that cannot be closed offline.
 
-**5. `COMPLIANCE_LOG_GROUP` still defaults to `compliance-engine-prod`.**
-`.mcp.json` now sets it correctly, so the tools work, but the default in
-`mcp_server/config.py` is still wrong for this repo's own tfvars.
-`COMPLIANCE_REGION` is required and fails loudly when unset; this one guesses.
-There is no good reason for the difference. See entry 17.
+**2. The Lambda is over-provisioned, and lowering it is probably still wrong.**
+109MB was used of 256MB allocated. The obvious move is 128MB, and I am not
+making it. Lambda ties CPU to memory, so halving the memory halves the CPU,
+which works directly against the timeout risk that the batching work above
+exists to reduce. The 109MB figure also came from a security group event, the
+smallest kind; nothing has measured a `RunInstances` naming fifty instances.
+The saving is a fraction of a cent a month against an out-of-memory kill that
+takes the whole invocation with it. Revisit with a measurement from a large
+event, not from the smallest one.
 
-**6. The Lambda is over-provisioned.** 109MB used of 256MB allocated on a cold
-start. 128MB would likely do, and Lambda bills on memory.
+### Done on 2026-10-02
+
+- **Watching the calls that precede a public bucket.** `DeleteBucketPublicAccessBlock`
+  and `PutBucketOwnershipControls` are now registered. They report and do not
+  remediate, which was the decision the item was waiting on. See entry 16.
+- **`handle_run_instances` no longer describes one instance at a time.** Fifty
+  instances went from 100 describe calls to 2. See entry 19.
+- **Exemptions warn before they lapse.** A daily sweep reports anything
+  expiring within a week, and separately counts exemptions that were never
+  being honoured because they carry no expiry date at all.
+- **`COMPLIANCE_LOG_GROUP` is required rather than guessing `prod`.** See
+  entry 17.
 
 ### Further out
 

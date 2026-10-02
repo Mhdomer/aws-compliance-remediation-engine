@@ -72,8 +72,8 @@ registry entry in `handler.py` + a module + an EventBridge rule + a matching
 
 ```bash
 python -m pytest -q --cov=src/lambda --cov=scripts   # coverage report
-python -m pytest -q                                  # 352 tests
-cd infrastructure && terraform test                  # 26 tests, no credentials
+python -m pytest -q                                  # 380 tests
+cd infrastructure && terraform test                  # 31 tests, no credentials
 cd infrastructure && terraform validate
 cd infrastructure && terraform fmt -check -recursive
 ```
@@ -108,7 +108,7 @@ These look like inconsistencies. They are deliberate and each has a test.
 - **`ipProtocol: -1` carries `from_port`/`to_port` of `None`.** An all-traffic
   rule has no port range and AWS stores it without one; synthesising 0-65535
   described it as a TCP range and dragged it into the duplicate-revoke bug.
-- **`aws_lambda_permission` is a `for_each` over the four rule ARNs.**
+- **`aws_lambda_permission` is a `for_each` over every rule ARN.**
   `source_arn` takes one ARN, not a list. Add a fifth EventBridge rule and you
   must add a permission here too, or it silently cannot invoke the function.
 - **The handler drops events caused by its own execution role.** Remediation
@@ -139,6 +139,18 @@ These look like inconsistencies. They are deliberate and each has a test.
   the DLQ. EC2 catches per-instance, because one `RunInstances` event can name
   several instances and one unreadable instance must not abandon the rest — but
   it publishes `DetectionsUndetermined` and a notice rather than staying silent.
+- **Protection-weakening events are reported, never remediated.**
+  `DeleteBucketPublicAccessBlock` and `PutBucketOwnershipControls` publish
+  `ProtectionsWeakened` and send a notice with the actor. Changing them back
+  would mean fighting a change the engine cannot tell was deliberate.
+- **The expiry sweep is the only rule that fires on a timer.** A date passing is
+  nobody doing anything, so no CloudTrail event exists for it. It needs
+  `tag:GetResources`, granted read-only: a tag write would let the engine exempt
+  resources from itself.
+- **EC2 describes are batched, remediation is not.** One `describe_instances`
+  and one `describe_volumes` per event rather than per instance. Remediation
+  still runs per instance on purpose, because batching `stop_instances` would
+  give up the per-instance failure isolation.
 - **One test parses `eventbridge.tf`** and asserts its `(source, eventName)`
   pairs match `handler._RULE_REGISTRY` exactly. Adding a rule in one place and
   not the other fails silently in production, so it fails loudly here.
@@ -222,7 +234,7 @@ issue 1 which is commit `45597c1`. Commit messages and per-issue paths are in
 `docs/pending-commits.md`.
 
 ## docs/engineering-log.md
-A first-person write-up of eighteen bugs found across the review pass and live AWS
+A first-person write-up of nineteen bugs found across the review pass and live AWS
 deployment sessions: what was assumed, what was actually happening, how it was found,
 what changed. Tracked (not gitignored) because it is the "built and defended"
 evidence the vault CLAUDE.md says these projects lack. If he asks for interview prep
@@ -241,18 +253,25 @@ material, start there rather than re-deriving it.
 Read those before starting anything here. The first item needs a design decision
 rather than code, so do not treat it as a ticket.
 
-## Known gap: S3 rule coverage
+## S3 rule coverage: closed 2026-10-02
 
-The engine watches `PutBucketAcl`, but a bucket created on a current account
-cannot accept a public ACL: since April 2023 every new bucket has Block Public
-Access fully on and `ObjectOwnership: BucketOwnerEnforced`, which disables ACLs.
-Making a bucket public now takes `DeleteBucketPublicAccessBlock` and
-`PutBucketOwnershipControls` first, and **neither is in `_RULE_REGISTRY`**.
+The engine used to watch only `PutBucketAcl`, which on any account created
+since April 2023 cannot succeed until `DeleteBucketPublicAccessBlock` and
+`PutBucketOwnershipControls` have already run. Both are now registered.
 
-Confirmed on a live account 2026-09-19. Written up as entry 16 in
-`docs/engineering-log.md`, deliberately not fixed: turning BPA off is not
-automatically a violation the way a public ACL is, so the right shape is probably
-a notice rather than a remediation. Decide that before adding the rules.
+**They report and do not remediate**, and that is deliberate. Removing Block
+Public Access is not the same kind of fact as a bucket being public: some
+buckets legitimately need ACLs or public reads, and the engine cannot tell a
+deliberate change from a mistake. They publish `ProtectionsWeakened` and send a
+notice naming the bucket and the principal. Do not "fix" this into a
+remediation without deciding that question again.
+
+Only one direction of `PutBucketOwnershipControls` is reported. Setting
+`BucketOwnerEnforced` turns ACLs off, which is the safe direction. An event
+with no readable `ObjectOwnership` is undetermined, not compliant.
+
+The two fixtures for these events are **constructed, not captured**, and say so
+in a `_comment`. Replace them with real events on the next deployment.
 
 ## Releases
 
