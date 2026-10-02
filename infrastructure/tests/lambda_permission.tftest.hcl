@@ -56,6 +56,11 @@ override_resource {
   values = { arn = "arn:aws:events:us-east-1:123456789012:rule/mock-sg-ingress" }
 }
 
+override_resource {
+  target = aws_cloudwatch_event_rule.exemption_expiry
+  values = { arn = "arn:aws:events:us-east-1:123456789012:rule/mock-exemption-expiry" }
+}
+
 variables {
   alert_email = "security@example.com"
 }
@@ -74,7 +79,7 @@ run "every_permission_is_scoped_to_a_source_arn" {
   }
 }
 
-run "permissions_cover_exactly_the_four_rules" {
+run "permissions_cover_exactly_the_rules" {
   command = apply
 
   # A rule with no matching permission cannot invoke the function, so this
@@ -88,6 +93,7 @@ run "permissions_cover_exactly_the_four_rules" {
       aws_cloudwatch_event_rule.s3_weak_encryption.arn,
       aws_cloudwatch_event_rule.ec2_run_instances.arn,
       aws_cloudwatch_event_rule.sg_ingress.arn,
+      aws_cloudwatch_event_rule.exemption_expiry.arn,
     ])
     error_message = "invoke permissions must match the four EventBridge rule ARNs exactly"
   }

@@ -17,6 +17,7 @@ ENGINE_METRICS = (
     'ExemptionsRejected',
     'RemediationsThrottled',
     'ViolationAttemptsBlocked',
+    'ExemptionsExpiringSoon',
 )
 
 # ViolationsDetected and the remediation counters are dimensioned by
@@ -29,6 +30,7 @@ _DIMENSION = {
     'ExemptionsApplied': 'CheckType',
     'ExemptionsRejected': 'CheckType',
     'RemediationsThrottled': 'CheckType',
+    'ExemptionsExpiringSoon': 'CheckType',
     # The only one keyed on the API call rather than the check, because a
     # rejected call never reached a rule and so has no violation type.
     'ViolationAttemptsBlocked': 'EventName',

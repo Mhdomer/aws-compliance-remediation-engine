@@ -131,6 +131,27 @@ resource "aws_iam_role_policy" "ec2_remediation" {
   })
 }
 
+# ─── Reading exemption tags for the scheduled expiry sweep ───────────────────
+
+resource "aws_iam_role_policy" "exemption_discovery" {
+  name = "exemption-discovery"
+  role = aws_iam_role.lambda_exec.id
+
+  # tag:GetResources does not support resource-level permissions, the same
+  # constraint ec2:Describe* has. It is read-only and returns ARNs and tags,
+  # nothing else, and the sweep needs to see every resource carrying the
+  # exemption tag to know which ones are about to stop being honoured.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "ReadExemptionTags"
+      Effect   = "Allow"
+      Action   = ["tag:GetResources"]
+      Resource = "*"
+    }]
+  })
+}
+
 # ─── SNS alert publishing ─────────────────────────────────────────────────────
 
 resource "aws_iam_role_policy" "sns_publish" {

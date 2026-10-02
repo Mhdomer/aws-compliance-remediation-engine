@@ -73,6 +73,7 @@ def describe_engine_rules() -> dict:
             'ExemptionsRejected',
             'RemediationsThrottled',
             'ViolationAttemptsBlocked',
+            'ExemptionsExpiringSoon',
         ],
         'note': (
             'Detection is event-driven through CloudTrail and EventBridge. A '

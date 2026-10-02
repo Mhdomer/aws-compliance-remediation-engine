@@ -94,6 +94,7 @@ resource "aws_lambda_permission" "eventbridge" {
     s3-weak-encryption = aws_cloudwatch_event_rule.s3_weak_encryption.arn
     ec2-run-instances  = aws_cloudwatch_event_rule.ec2_run_instances.arn
     sg-ingress         = aws_cloudwatch_event_rule.sg_ingress.arn
+    exemption-expiry   = aws_cloudwatch_event_rule.exemption_expiry.arn
   }
 
   statement_id  = "AllowExecutionFrom-${each.key}"

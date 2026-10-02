@@ -136,6 +136,33 @@ def publish_throttled(check_type: str, resource_id: str) -> None:
         })
 
 
+def publish_exemption_expiring(resource_id: str) -> None:
+    """Record an exemption that lapses soon.
+
+    Separate from ExemptionsApplied, which counts a check being skipped right
+    now. This counts one that is about to stop being skipped, which is the
+    opposite situation and needs a different response: renew it or let it go
+    on purpose, before the engine starts remediating again.
+    """
+    now = datetime.now(timezone.utc)
+
+    metric = {
+        'MetricName': 'ExemptionsExpiringSoon',
+        'Dimensions': [{'Name': 'CheckType', 'Value': 'ExemptionExpiry'}],
+        'Value': 1,
+        'Unit': 'Count',
+        'Timestamp': now,
+    }
+
+    try:
+        _get_client().put_metric_data(Namespace=NAMESPACE, MetricData=[metric])
+    except Exception as exc:
+        logger.error('Failed to publish CloudWatch metrics', extra={
+            'resource_id': resource_id,
+            'error': str(exc),
+        })
+
+
 def publish_attempt_blocked(event_name: str, resource_id: str, error_code: str) -> None:
     """Record an API call AWS itself rejected.
 

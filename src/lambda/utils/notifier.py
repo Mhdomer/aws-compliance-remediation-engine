@@ -97,6 +97,7 @@ def send_notice(
         })
 
 
+NOTICE_EXEMPTION_EXPIRING = 'ComplianceExemptionExpiring'
 NOTICE_ATTEMPT_BLOCKED = 'ComplianceViolationAttemptBlocked'
 NOTICE_EXEMPTION = 'ComplianceExemptionApplied'
 NOTICE_UNDETERMINED = 'ComplianceCheckUndetermined'

@@ -3,6 +3,7 @@ import os
 from utils.cloudwatch_utils import publish_attempt_blocked
 from utils.logger import setup_logger
 from utils.notifier import NOTICE_ATTEMPT_BLOCKED, STATUS_BLOCKED, send_notice
+from expiry_sweep import sweep as run_expiry_sweep
 from rules import s3_rules, ec2_rules, sg_rules
 
 logger = setup_logger(__name__)
@@ -98,6 +99,15 @@ def lambda_handler(event: dict, context) -> dict:
             'source': source,
             'event_name': event_name,
         }
+
+    if source == 'aws.events' and event.get('detail-type') == 'Scheduled Event':
+        # Not a CloudTrail event and not a violation. The scheduled sweep looks
+        # for exemptions about to lapse, so somebody hears about it before the
+        # engine starts checking those resources again.
+        logger.info('Running scheduled exemption expiry sweep', extra={
+            'request_id': request_id,
+        })
+        return run_expiry_sweep()
 
     error_code = detail.get('errorCode', '')
     if error_code:

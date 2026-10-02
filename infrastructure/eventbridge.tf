@@ -82,3 +82,26 @@ resource "aws_cloudwatch_event_target" "sg_ingress" {
   rule = aws_cloudwatch_event_rule.sg_ingress.name
   arn  = local.lambda_arn
 }
+
+# ─── Scheduled: warn before an exemption lapses ───────────────────────────────
+# Not a CloudTrail rule. Everything above reacts to somebody doing something;
+# this one fires on a timer because the thing worth catching is a date passing,
+# which nobody does and so nothing emits an event for.
+#
+# Exemptions expire, which is correct. Nothing announced it, so a resource
+# silently started being checked again and its owner found out from a
+# remediation. The sweep reads the exemption tags and sends a notice for
+# anything lapsing within the week.
+#
+# Daily is deliberate. The warning window is seven days, so a daily sweep gives
+# seven chances to see it before the exemption actually lapses.
+resource "aws_cloudwatch_event_rule" "exemption_expiry" {
+  name                = "${local.name_prefix}-exemption-expiry"
+  description         = "Daily sweep for compliance exemptions about to expire"
+  schedule_expression = "rate(1 day)"
+}
+
+resource "aws_cloudwatch_event_target" "exemption_expiry" {
+  rule = aws_cloudwatch_event_rule.exemption_expiry.name
+  arn  = local.lambda_arn
+}
