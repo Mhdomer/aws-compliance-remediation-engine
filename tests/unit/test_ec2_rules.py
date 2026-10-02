@@ -247,10 +247,15 @@ class TestRemediationAction:
 
 # ─── detection must not fail open ────────────────────────────────────────────
 
-def _instance(block_device_mappings, state='running', tags=None):
+def _instance(block_device_mappings, state='running', tags=None,
+              instance_id='i-0abc1234567890def'):
+    # InstanceId is present because real describe_instances always sends it.
+    # It was omitted while the code read the response positionally, which made
+    # the fixture unable to represent a response about several instances.
     return {
         'Reservations': [{
             'Instances': [{
+                'InstanceId': instance_id,
                 'State': {'Name': state},
                 'Tags': tags or [],
                 'BlockDeviceMappings': block_device_mappings,
@@ -355,7 +360,9 @@ class TestDetectionCannotFailOpen:
             {'Ebs': {'VolumeId': 'vol-b'}},
         ])
         # AWS answered about one of the two volumes we asked about.
-        client.describe_volumes.return_value = {'Volumes': [{'Encrypted': True}]}
+        client.describe_volumes.return_value = {
+            'Volumes': [{'VolumeId': 'vol-a', 'Encrypted': True}]
+        }
         mock_factory.return_value = client
 
         from rules.ec2_rules import handle_run_instances
@@ -382,7 +389,9 @@ class TestDetectionCannotFailOpen:
     ):
         client = MagicMock()
         client.describe_instances.return_value = _instance([{'Ebs': {'VolumeId': 'vol-a'}}])
-        client.describe_volumes.return_value = {'Volumes': [{'Encrypted': True}]}
+        client.describe_volumes.return_value = {
+            'Volumes': [{'VolumeId': 'vol-a', 'Encrypted': True}]
+        }
         mock_factory.return_value = client
 
         from rules.ec2_rules import handle_run_instances
@@ -400,7 +409,10 @@ class TestDetectionCannotFailOpen:
             {'Ebs': {'VolumeId': 'vol-b'}},
         ])
         client.describe_volumes.return_value = {
-            'Volumes': [{'Encrypted': True}, {'Encrypted': True}]
+            'Volumes': [
+                {'VolumeId': 'vol-a', 'Encrypted': True},
+                {'VolumeId': 'vol-b', 'Encrypted': True},
+            ]
         }
         mock_factory.return_value = client
 
@@ -451,7 +463,9 @@ class TestUndeterminedIsReported:
     ):
         client = MagicMock()
         client.describe_instances.return_value = _instance([{'Ebs': {'VolumeId': 'vol-a'}}])
-        client.describe_volumes.return_value = {'Volumes': [{'Encrypted': True}]}
+        client.describe_volumes.return_value = {
+            'Volumes': [{'VolumeId': 'vol-a', 'Encrypted': True}]
+        }
         mock_factory.return_value = client
 
         from rules.ec2_rules import handle_run_instances

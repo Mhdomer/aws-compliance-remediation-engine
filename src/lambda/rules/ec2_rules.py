@@ -123,13 +123,115 @@ def _get_instance_ids(detail: dict) -> list[str]:
     return [item['instanceId'] for item in items]
 
 
-def _describe_instance(instance_id: str) -> dict:
+def _prefetch_instances(instance_ids: list) -> dict | None:
+    """Describe every instance the event named, in one call.
+
+    Returns a map keyed on instance id, or None if the batch could not be made
+    at all, in which case the caller falls back to describing one at a time and
+    behaviour is exactly what it was before.
+
+    A throttle re-raises rather than degrading: being throttled means nothing
+    was looked at, and the retry is what answers the question.
+    """
+    try:
+        response = _get_client().describe_instances(InstanceIds=instance_ids)
+    except ClientError as exc:
+        if is_throttling_error(exc):
+            publish_throttled(VIOLATION_TYPE, instance_ids[0])
+            logger.warning('Detection throttled, retrying via event replay', extra={
+                'instance_count': len(instance_ids),
+                'error': str(exc),
+            })
+            raise
+        # Not fatal. Fall back to the per-instance path, which isolates the
+        # failure to the one instance that caused it.
+        logger.warning('Batched describe_instances failed, falling back', extra={
+            'instance_count': len(instance_ids),
+            'error': str(exc),
+        })
+        return None
+
+    found = {}
+    returned = 0
+    for reservation in response.get('Reservations', []):
+        for instance in reservation.get('Instances', []):
+            returned += 1
+            instance_id = instance.get('InstanceId')
+            if instance_id:
+                found[instance_id] = instance
+
+    if returned and not found:
+        # Instances came back but none carried an InstanceId, so there is no
+        # way to say which is which. Real EC2 always sends it; whatever this
+        # is, it cannot be indexed, so fall back rather than guess by position.
+        logger.warning('describe_instances returned instances with no ids', extra={
+            'returned': returned,
+        })
+        return None
+
+    return found
+
+
+def _prefetch_volumes(instances: list) -> dict | None:
+    """Describe every volume across every instance, in one call.
+
+    Same contract as _prefetch_instances: None means fall back.
+    """
+    volume_ids = []
+    for instance in instances:
+        for mapping in instance.get('BlockDeviceMappings', []):
+            volume_id = mapping.get('Ebs', {}).get('VolumeId')
+            if volume_id:
+                volume_ids.append(volume_id)
+
+    if not volume_ids:
+        return {}
+
+    try:
+        response = _get_client().describe_volumes(VolumeIds=volume_ids)
+    except ClientError as exc:
+        if is_throttling_error(exc):
+            publish_throttled(VIOLATION_TYPE, volume_ids[0])
+            logger.warning('Detection throttled, retrying via event replay', extra={
+                'volume_count': len(volume_ids),
+                'error': str(exc),
+            })
+            raise
+        logger.warning('Batched describe_volumes failed, falling back', extra={
+            'volume_count': len(volume_ids),
+            'error': str(exc),
+        })
+        return None
+
+    volumes = response.get('Volumes', [])
+    found = {v['VolumeId']: v for v in volumes if v.get('VolumeId')}
+
+    if volumes and not found:
+        # Same reasoning as the instance prefetch: a response with no ids on it
+        # cannot be matched back to the volumes that were asked about.
+        logger.warning('describe_volumes returned volumes with no ids', extra={
+            'returned': len(volumes),
+        })
+        return None
+
+    return found
+
+
+def _describe_instance(instance_id: str, prefetched: dict | None = None) -> dict:
     """Fetch the instance once, for both the exemption and volume checks.
 
     These used to be two separate describe_instances calls for the same
     instance, which doubled the throttling exposure on a RunInstances burst and
     left a window in which the two could disagree.
+
+    With a prefetched map this is a lookup. A missing key raises KeyError on
+    purpose: EC2 answered the batch and did not mention this instance, so it is
+    undetermined, and the caller's existing handler already reports that.
+    Asking again would most likely get the same silence.
     """
+    if prefetched is not None:
+        return prefetched[instance_id]
+
     response = _get_client().describe_instances(InstanceIds=[instance_id])
     return response['Reservations'][0]['Instances'][0]
 
@@ -148,7 +250,9 @@ def _exemption_status(instance: dict) -> tuple[bool, str]:
     return evaluate_exemption(tags)
 
 
-def _volume_encryption_status(instance: dict) -> str:
+def _volume_encryption_status(
+    instance: dict, prefetched_volumes: dict | None = None
+) -> str:
     """Return whether the instance's EBS volumes are encrypted, or that we could not tell.
 
     Every path that cannot see the data returns ENCRYPTION_UNDETERMINED rather
@@ -172,7 +276,15 @@ def _volume_encryption_status(instance: dict) -> str:
     if len(volume_ids) != len(mappings):
         return ENCRYPTION_UNDETERMINED  # a mapping we could not read
 
-    volumes = _get_client().describe_volumes(VolumeIds=volume_ids).get('Volumes', [])
+    if prefetched_volumes is not None:
+        volumes = [
+            prefetched_volumes[v] for v in volume_ids if v in prefetched_volumes
+        ]
+    else:
+        volumes = _get_client().describe_volumes(
+            VolumeIds=volume_ids
+        ).get('Volumes', [])
+
     if len(volumes) != len(volume_ids):
         return ENCRYPTION_UNDETERMINED  # AWS did not answer about every volume
 
@@ -193,10 +305,21 @@ def handle_run_instances(detail: dict) -> dict:
         logger.error('RunInstances event has no instance IDs in responseElements')
         return {'status': 'error', 'reason': 'no_instances_in_event'}
 
+    # One describe for every instance, and one for every volume across them,
+    # instead of two per instance. A fifty-instance RunInstances used to cost
+    # 300 API calls inside one 60-second invocation, which times out and
+    # replays. Either prefetch returning None means the batch failed for a
+    # reason that was not a throttle, and the loop below falls back to the
+    # per-instance calls it always made.
+    prefetched = _prefetch_instances(instance_ids)
+    prefetched_volumes = (
+        _prefetch_volumes(list(prefetched.values())) if prefetched else None
+    )
+
     results = []
     for instance_id in instance_ids:
         try:
-            instance = _describe_instance(instance_id)
+            instance = _describe_instance(instance_id, prefetched)
         except (ClientError, IndexError, KeyError) as exc:
             if is_throttling_error(exc):
                 # Undetermined means "I looked and could not tell". Being
@@ -259,7 +382,9 @@ def handle_run_instances(detail: dict) -> dict:
             continue
 
         try:
-            encryption = _volume_encryption_status(instance)
+            encryption = _volume_encryption_status(
+                instance, prefetched_volumes
+            )
         except (ClientError, KeyError) as exc:
             if is_throttling_error(exc):
                 publish_throttled(VIOLATION_TYPE, instance_id)
