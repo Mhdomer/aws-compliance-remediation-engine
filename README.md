@@ -153,7 +153,10 @@ pip install -r requirements-mcp.txt
     "compliance-engine": {
       "command": "python",
       "args": ["-m", "mcp_server.server"],
-      "env": { "COMPLIANCE_REGION": "us-east-1" }
+      "env": {
+        "COMPLIANCE_REGION": "us-east-1",
+        "COMPLIANCE_LOG_GROUP": "/aws/lambda/compliance-engine-test"
+      }
     }
   }
 }
@@ -166,10 +169,18 @@ fall back to your CLI's configured region, which is not necessarily where the
 engine is deployed, and every query would come back empty, reading as "no
 violations" rather than "wrong region". Set it to `aws_region` from your tfvars.
 
+**`COMPLIANCE_LOG_GROUP` is required for the same reason.** It used to default
+to the engine's `prod` function name, while the only tfvars in this repo
+deploys `test`. On a clean checkout that pointed `search_compliance_logs` and
+`get_resource_history` at a log group the project never creates. They warned
+rather than returning an empty success, which is the only reason it was caught.
+A default that is wrong for the repo's own default deployment is a bug with a
+fallback value.
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `COMPLIANCE_REGION` | *required* | Region the engine is deployed in |
-| `COMPLIANCE_LOG_GROUP` | `/aws/lambda/compliance-engine-prod` | Lambda log group to query |
+| `COMPLIANCE_LOG_GROUP` | *required* | Lambda log group to query: `/aws/lambda/<project_name>-<environment>` |
 | `COMPLIANCE_NAMESPACE` | `ComplianceEngine` | CloudWatch metric namespace |
 
 ### A demo conversation

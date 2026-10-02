@@ -18,6 +18,7 @@ def cw():
 @pytest.fixture(autouse=True)
 def region(monkeypatch):
     monkeypatch.setenv('COMPLIANCE_REGION', 'us-east-1')
+    monkeypatch.setenv('COMPLIANCE_LOG_GROUP', '/aws/lambda/compliance-engine-test')
 
 
 class TestGetCompliancePosture:
